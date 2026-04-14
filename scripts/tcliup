@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# tcliup — same role as tempo's tempoup: entry point for install / upgrade.
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$DIR/install.sh" "$@"

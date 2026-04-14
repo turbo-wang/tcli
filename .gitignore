@@ -1,0 +1,33 @@
+# Rust
+**/target/
+**/*.rs.bk
+**/*.pdb
+
+# Python (mock backend / tests)
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local env (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Archives / temp
+*.log
+*.tmp
