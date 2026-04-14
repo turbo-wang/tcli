@@ -7,7 +7,7 @@
 #   TCLI_RELEASE_REPO=owner/repo TCLI_VERSION=v0.1.0 ./scripts/install.sh --release
 set -euo pipefail
 
-TCLIUP_INSTALLER_VERSION="0.1.0"
+TCLIUP_INSTALLER_VERSION="0.1.1"
 REPO="${TCLI_RELEASE_REPO:-}"
 BIN_DIR="${TCLI_BIN_DIR:-$HOME/.tcli/bin}"
 
@@ -162,6 +162,10 @@ install_from_release() {
   cp -f "$bin_path" "$out"
   chmod 755 "$out" 2>/dev/null || true
   info "Installed $out ($tag)"
+  # Clear EXIT trap before returning: `tmp` is local; the trap would run at
+  # script exit when `tmp` is out of scope and fail under `set -u`.
+  rm -rf "$tmp"
+  trap - EXIT
 }
 
 install_from_source() {
