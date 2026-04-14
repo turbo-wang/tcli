@@ -35,3 +35,49 @@ async fn wallet_login_oauth_device_flow() {
 
     std::env::remove_var("TCLI_AUTH_BASE");
 }
+
+#[tokio::test]
+#[serial]
+async fn wallet_testlogin_oauth_device_flow() {
+    require_python_mock().await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let home: PathBuf = tmp.path().join("tcli-home");
+    fs::create_dir_all(&home).unwrap();
+
+    let base = test_mock_base_url();
+    std::env::set_var("TCLI_AUTH_BASE", &base);
+
+    let cfg = ConfigFile::default();
+    let resolved = config::resolve(&cfg).unwrap();
+
+    auth::test_login(&home, &resolved, false).await.unwrap();
+
+    let stored = load_oauth(&home).unwrap().expect("token saved");
+    assert_eq!(stored.access_token, "demo-access-token");
+
+    std::env::remove_var("TCLI_AUTH_BASE");
+}
+
+#[tokio::test]
+#[serial]
+async fn wallet_testcharlogin_oauth_device_flow() {
+    require_python_mock().await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let home: PathBuf = tmp.path().join("tcli-home");
+    fs::create_dir_all(&home).unwrap();
+
+    let base = test_mock_base_url();
+    std::env::set_var("TCLI_AUTH_BASE", &base);
+
+    let cfg = ConfigFile::default();
+    let resolved = config::resolve(&cfg).unwrap();
+
+    auth::test_char_login(&home, &resolved, false).await.unwrap();
+
+    let stored = load_oauth(&home).unwrap().expect("token saved");
+    assert_eq!(stored.access_token, "demo-access-token");
+
+    std::env::remove_var("TCLI_AUTH_BASE");
+}

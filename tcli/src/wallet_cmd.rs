@@ -23,7 +23,7 @@ pub fn whoami(home: &Path) -> Result<()> {
             println!("logged_in: false");
             println!("ready: false");
             println!();
-            println!("Run `tcli wallet login` for an OAuth demo session, or use `tempo wallet login` for Tempo Wallet.");
+            println!("Run `tcli wallet login`, `testlogin`, or `testcharlogin` for an OAuth demo session, or use `tempo wallet login` for Tempo Wallet.");
         }
     }
     Ok(())

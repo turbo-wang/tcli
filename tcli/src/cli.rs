@@ -76,6 +76,12 @@ pub enum TopLevel {
 pub enum WalletAction {
     /// OAuth2 device flow login (not Tempo passkey wallet — see guide)
     Login,
+    /// Demo: PNG / terminal image QR only; poll token endpoint until authorized (same session as login)
+    #[command(name = "testlogin")]
+    TestLogin,
+    /// Demo: unicode block QR only; poll token endpoint until authorized
+    #[command(name = "testcharlogin")]
+    TestCharLogin,
     /// Remove stored OAuth token
     Logout,
     /// Show OAuth session / readiness (closest to tempo wallet whoami)
@@ -139,6 +145,12 @@ pub async fn run() -> Result<()> {
         TopLevel::Wallet { action } => match action {
             WalletAction::Login => {
                 crate::auth::login(&home, &resolved, cli.verbose).await?;
+            }
+            WalletAction::TestLogin => {
+                crate::auth::test_login(&home, &resolved, cli.verbose).await?;
+            }
+            WalletAction::TestCharLogin => {
+                crate::auth::test_char_login(&home, &resolved, cli.verbose).await?;
             }
             WalletAction::Logout => {
                 remove_oauth(&home)?;

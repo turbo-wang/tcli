@@ -12,7 +12,7 @@ pub fn guide_text() -> &'static str {
   tempo request  — HTTP + MPP signing
 
 tcli — same command names where applicable; implementation differs:
-  tcli wallet login | logout     — OAuth2 device flow; token in ~/.tcli/wallet/oauth.json
+  tcli wallet login | testlogin | testcharlogin | logout — OAuth2 device flow; token in ~/.tcli/wallet/oauth.json
   tcli wallet whoami | balance    — OAuth session / readiness (not on-chain balances)
   tcli wallet keys|fund|transfer|services|sessions|mpp-sign  — stubs; need Tempo Wallet + `tempo`
   tcli request                    — curl-like; demo x402 + payment-token; MPP not signed here
