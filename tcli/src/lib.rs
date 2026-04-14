@@ -1,6 +1,6 @@
 pub mod api;
 pub mod auth;
-mod browser_popup;
+mod oauth_http;
 pub mod cli;
 pub mod config;
 pub mod config_file;
@@ -8,6 +8,8 @@ pub mod storage;
 pub mod tempo_reference;
 pub mod wallet_cmd;
 pub mod x402;
+
+pub use auth::LoginOptions;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

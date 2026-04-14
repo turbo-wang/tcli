@@ -12,7 +12,7 @@ pub fn guide_text() -> &'static str {
   tempo request  — HTTP + MPP signing
 
 tcli — same command names where applicable; implementation differs:
-  tcli wallet login | logout — OAuth2 device flow (local QR page + browser); token in ~/.tcli/wallet/oauth.json
+  tcli wallet login | logout — OAuth2 device flow (QR as JSON base64 PNG + background token poll); token in ~/.tcli/wallet/oauth.json
   tcli wallet whoami | balance    — OAuth session / readiness (not on-chain balances)
   tcli wallet keys|fund|transfer|services|sessions|mpp-sign  — stubs; need Tempo Wallet + `tempo`
   tcli request                    — curl-like; demo x402 + payment-token; MPP not signed here
@@ -23,7 +23,7 @@ Differences vs tempo request:
 
 Configuration:
   ~/.tcli/config.toml [auth] base, client_id, paths; TCLI_AUTH_BASE; [payment_token] url / disable
-  Optional: TCLI_BROWSER=/path/to/chrome (or msedge) for a compact app-style login window; else default browser
+  Login: stdout prints one JSON line with qr_png_base64 / auth_url; a background process polls the OAuth token endpoint until authorized.
 
 Docs: https://docs.tempo.xyz/cli/wallet
 "#

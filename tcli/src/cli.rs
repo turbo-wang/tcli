@@ -75,7 +75,11 @@ pub enum TopLevel {
 #[derive(Subcommand)]
 pub enum WalletAction {
     /// OAuth2 device flow login (not Tempo passkey wallet — see guide)
-    Login,
+    Login {
+        /// Internal: poll token endpoint from state written by a parent login (do not use manually).
+        #[arg(long, hide = true)]
+        poll_state: Option<std::path::PathBuf>,
+    },
     /// Remove stored OAuth token
     Logout,
     /// Show OAuth session / readiness (closest to tempo wallet whoami)
@@ -137,8 +141,18 @@ pub async fn run() -> Result<()> {
 
     match cli.command {
         TopLevel::Wallet { action } => match action {
-            WalletAction::Login => {
-                crate::auth::login(&home, &resolved, cli.verbose).await?;
+            WalletAction::Login { poll_state } => {
+                if let Some(path) = poll_state {
+                    crate::auth::login_poll_from_state_file(&path, cli.verbose).await?;
+                } else {
+                    crate::auth::login(
+                        &home,
+                        &resolved,
+                        cli.verbose,
+                        crate::auth::LoginOptions::default(),
+                    )
+                    .await?;
+                }
             }
             WalletAction::Logout => {
                 remove_oauth(&home)?;

@@ -32,8 +32,9 @@ error() { echo -e "${RED}error${NC}: $1" >&2; exit 1; }
 
 # Local clone: delegate to scripts/install.sh (developer running ./install.sh from repo).
 _resolve_here() {
-  local s="${BASH_SOURCE[0]:-}"
-  if [[ -z "$s" || "$s" == bash ]]; then
+  # bash: BASH_SOURCE; POSIX sh: only $0 (run with: sh install.sh from repo root)
+  local s="${BASH_SOURCE[0]:-$0}"
+  if [[ -z "$s" || "$s" == bash || "$s" == -* ]]; then
     return 1
   fi
   if [[ ! -f "$s" ]]; then

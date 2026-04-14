@@ -23,6 +23,9 @@ warn() { echo -e "${YELLOW}warn${NC}: $1"; }
 error() { echo -e "${RED}error${NC}: $1" >&2; exit 1; }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/cargo.sh"
+
 FROM_RELEASE=0
 VERSION=""
 
@@ -187,12 +190,11 @@ install_from_release() {
 }
 
 install_from_source() {
-  command -v cargo >/dev/null 2>&1 || error "cargo not found. Install Rust: https://rustup.rs"
   info "Installing tcli from source…"
   "$ROOT/scripts/build.sh"
   local target_dir built
   target_dir="$(
-    cd "$ROOT/tcli" && cargo metadata --format-version=1 --no-deps 2>/dev/null \
+    cd "$ROOT/tcli" && cargo_exec metadata --format-version=1 --no-deps 2>/dev/null \
       | python3 -c 'import sys,json; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null \
       || echo "$ROOT/tcli/target"
   )"

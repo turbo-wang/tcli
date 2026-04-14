@@ -10,6 +10,7 @@ use common::{require_python_mock, test_mock_base_url};
 use serial_test::serial;
 use tcli::auth;
 use tcli::config;
+use tcli::LoginOptions;
 use tcli::config_file::ConfigFile;
 use tcli::storage::load_oauth;
 
@@ -28,7 +29,16 @@ async fn wallet_login_oauth_device_flow() {
     let cfg = ConfigFile::default();
     let resolved = config::resolve(&cfg).unwrap();
 
-    auth::login(&home, &resolved, false).await.unwrap();
+    auth::login(
+        &home,
+        &resolved,
+        false,
+        LoginOptions {
+            detach_poll: false,
+        },
+    )
+    .await
+    .unwrap();
 
     let stored = load_oauth(&home).unwrap().expect("token saved");
     assert_eq!(stored.access_token, "demo-access-token");
