@@ -23,6 +23,7 @@ Differences vs tempo request:
 
 Configuration:
   ~/.tcli/config.toml [auth] base, client_id, paths; TCLI_AUTH_BASE; [payment_token] url / disable
+  Optional: TCLI_BROWSER=/path/to/chrome (or msedge) for a compact app-style login window; else default browser
 
 Docs: https://docs.tempo.xyz/cli/wallet
 "#

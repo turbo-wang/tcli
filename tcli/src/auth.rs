@@ -12,6 +12,7 @@ use oauth2::{
 };
 use qrcode::QrCode;
 
+use crate::browser_popup;
 use crate::config::ResolvedAuth;
 use crate::storage::{OAuthStored, oauth_path, save_oauth};
 use crate::Result;
@@ -107,7 +108,7 @@ pub async fn login(home: &std::path::Path, resolved: &ResolvedAuth, verbose: boo
     println!("Verification code: {verification_code}");
     println!();
     println!("Local login page (QR): {local_page}");
-    let _ = webbrowser::open(&local_page);
+    browser_popup::open_login_page(&local_page);
     println!("Waiting for authentication (polling token endpoint)...");
     println!();
 

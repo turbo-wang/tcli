@@ -1,5 +1,6 @@
 pub mod api;
 pub mod auth;
+mod browser_popup;
 pub mod cli;
 pub mod config;
 pub mod config_file;
