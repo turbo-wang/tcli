@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use base64::Engine;
 use image::ImageFormat;
 use image::Luma;
 use oauth2::basic::BasicTokenType;
@@ -60,7 +59,7 @@ fn enrich_oauth_failure(message: String, auth_base: &url::Url) -> String {
 /// How the device-flow token poll is run after the QR step.
 #[derive(Debug, Clone, Copy)]
 pub struct LoginOptions {
-    /// When `true` (default for CLI), print one JSON line with the QR image and spawn a detached
+    /// When `true` (default for CLI), print one JSON line with the QR image path and spawn a detached
     /// `tcli wallet login --poll-state …` process to poll the token endpoint. When `false` (e.g.
     /// integration tests), poll in the current task so the process does not exit before tokens are saved.
     pub detach_poll: bool,
@@ -125,6 +124,24 @@ struct DevicePollState {
 
 fn poll_state_path(home: &Path) -> PathBuf {
     home.join("wallet").join(".device_login_poll.json")
+}
+
+/// Writes the login QR under `~/.openclaw/workspace/tcli-login/<session>/` (see [`crate::storage::openclaw_login_qr_png_path`]).
+fn write_login_qr_png_file(png: &[u8], verbose: bool) -> Result<PathBuf> {
+    let path = crate::storage::openclaw_login_qr_png_path();
+    if verbose {
+        eprintln!("[verbose] login QR output path: {}", path.display());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(crate::Error::Io)?;
+    }
+    std::fs::write(&path, png).map_err(crate::Error::Io)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+    }
+    path.canonicalize().map_err(crate::Error::Io)
 }
 
 fn write_poll_state(
@@ -192,7 +209,7 @@ fn build_client(resolved: &ResolvedAuth) -> Result<BasicClient> {
     )
 }
 
-/// OAuth2 device authorization: emit QR as base64 JSON, then poll the token endpoint (inline or subprocess).
+/// OAuth2 device authorization: write QR PNG under the wallet dir, emit one JSON line with its path, then poll the token endpoint (inline or subprocess).
 /// With `verbose`, prints OAuth endpoints and response metadata on stderr (no access_token body).
 pub async fn login(
     home: &std::path::Path,
@@ -243,18 +260,20 @@ pub async fn login(
     let verification_code = details.user_code().secret().to_string();
 
     let png = encode_login_qr_png(&auth_url_line)?;
-    let png_b64 = base64::engine::general_purpose::STANDARD.encode(&png);
-    let data_url = format!("data:image/png;base64,{png_b64}");
 
     if options.detach_poll {
+        let qr_path = write_login_qr_png_file(&png, verbose)?;
         let state_path = write_poll_state(home, resolved, &details)?;
         let line = serde_json::json!({
-            "qr_png_base64": png_b64,
-            "qr_image_data_url": data_url,
+            "qr_png_path": qr_path,
             "verification_code": verification_code,
             "auth_url": auth_url_line,
         });
         println!("{}", line);
+        eprintln!(
+            "QR code saved to {} (under OpenClaw workspace ~/.openclaw/workspace; open this path to scan).",
+            qr_path.display()
+        );
 
         spawn_poll_child(&state_path)?;
         eprintln!("Polling token endpoint in the background until login completes or expires.");
