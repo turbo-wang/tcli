@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use base64::Engine;
 use image::ImageFormat;
 use image::Luma;
@@ -9,48 +11,16 @@ use oauth2::{
     StandardTokenResponse, TokenResponse, TokenUrl,
 };
 use qrcode::QrCode;
-use qrcode::render::unicode;
 
 use crate::config::ResolvedAuth;
 use crate::storage::{OAuthStored, oauth_path, save_oauth};
 use crate::Result;
 
-#[derive(Clone, Copy)]
-enum WalletLoginKind {
-    /// `wallet login`: on loopback, image QR only; otherwise open browser when available.
-    Standard,
-    /// `wallet testlogin`: always image QR (PNG + optional iTerm inline); never opens browser; polls token endpoint until success.
-    Testlogin,
-    /// `wallet testcharlogin`: unicode block QR only; never opens browser; polls token endpoint until success.
-    TestCharlogin,
-}
-
 /// Run OAuth2 device authorization + polling; persist tokens to disk.
+/// Serves a local page with a QR code (from device-authorization response) and opens it in the browser,
+/// then polls the token endpoint until authorized.
 /// With `verbose`, prints OAuth endpoints and response metadata on stderr (no access_token body).
 pub async fn login(home: &std::path::Path, resolved: &ResolvedAuth, verbose: bool) -> Result<()> {
-    device_oauth_login(home, resolved, verbose, WalletLoginKind::Standard).await
-}
-
-/// Same device flow as [`login`], but always emits an image QR (no browser) and polls `/oauth/token` until authorized.
-pub async fn test_login(home: &std::path::Path, resolved: &ResolvedAuth, verbose: bool) -> Result<()> {
-    device_oauth_login(home, resolved, verbose, WalletLoginKind::Testlogin).await
-}
-
-/// Same device flow as [`login`], but always prints a unicode block QR (no browser) and polls `/oauth/token` until authorized.
-pub async fn test_char_login(
-    home: &std::path::Path,
-    resolved: &ResolvedAuth,
-    verbose: bool,
-) -> Result<()> {
-    device_oauth_login(home, resolved, verbose, WalletLoginKind::TestCharlogin).await
-}
-
-async fn device_oauth_login(
-    home: &std::path::Path,
-    resolved: &ResolvedAuth,
-    verbose: bool,
-    kind: WalletLoginKind,
-) -> Result<()> {
     let auth_url = AuthUrl::new(resolved.base.to_string())
         .map_err(|e| crate::Error::msg(format!("invalid auth URL: {e}")))?;
     let token_url = TokenUrl::new(resolved.token_url.to_string())
@@ -101,53 +71,45 @@ async fn device_oauth_login(
         .unwrap_or_else(|| details.verification_uri().to_string());
     let verification_code = details.user_code().secret().to_string();
 
-    let loopback = local_loopback_auth_base(resolved);
+    let png = encode_login_qr_png(&auth_url_line)?;
+    let png_b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+    let html = login_qr_page_html(&verification_code, &auth_url_line, &png_b64);
 
-    match kind {
-        WalletLoginKind::Testlogin => {
-            println!("tcli wallet testlogin — image QR below; polling the token endpoint until authorized.");
-            println!();
-            println!("Auth URL: {auth_url_line}");
-            println!("Verification code: {verification_code}");
-            println!();
-            print_login_image_qr(&auth_url_line)?;
-            println!();
-            println!("Polling token endpoint until login succeeds...");
-            println!();
-        }
-        WalletLoginKind::TestCharlogin => {
-            println!(
-                "tcli wallet testcharlogin — unicode QR below; polling the token endpoint until authorized."
-            );
-            println!();
-            println!("Auth URL: {auth_url_line}");
-            println!("Verification code: {verification_code}");
-            println!();
-            print_login_char_qr(&auth_url_line)?;
-            println!();
-            println!("Polling token endpoint until login succeeds...");
-            println!();
-        }
-        WalletLoginKind::Standard => {
-            println!("Auth URL: {auth_url_line}");
-            println!("Verification code: {verification_code}");
-            println!();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| crate::Error::msg(format!("bind local login page server: {e}")))?;
+    let addr = listener
+        .local_addr()
+        .map_err(|e| crate::Error::msg(format!("local_addr: {e}")))?;
+    let local_page = format!("http://127.0.0.1:{}/", addr.port());
 
-            if loopback {
-                print_login_image_qr(&auth_url_line)?;
-                println!();
-                println!("Waiting for authentication (mock approves in ~5s)...");
-                println!();
-            } else {
-                println!("Waiting for authentication...");
-                println!();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
-                if let Some(uri) = details.verification_uri_complete() {
-                    let _ = webbrowser::open(uri.secret().as_str());
-                }
-            }
-        }
-    }
+    let html = Arc::new(html);
+    let html_get = html.clone();
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::get(move || {
+            let h = html_get.clone();
+            async move { axum::response::Html((*h).clone()) }
+        }),
+    );
+
+    let server_task = tokio::spawn(async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await;
+    });
+
+    println!("Auth URL: {auth_url_line}");
+    println!("Verification code: {verification_code}");
+    println!();
+    println!("Local login page (QR): {local_page}");
+    let _ = webbrowser::open(&local_page);
+    println!("Waiting for authentication (polling token endpoint)...");
+    println!();
 
     let _spinner_guard = if !verbose {
         let spinner = indicatif::ProgressBar::new_spinner();
@@ -159,19 +121,24 @@ async fn device_oauth_login(
         None
     };
 
-    let token_res: StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType> = client
+    let poll = client
         .exchange_device_access_token(&details)
         .request_async(
             async_http_client,
             |d| tokio::time::sleep(d),
             Some(details.expires_in()),
         )
-        .await
-        .map_err(|e| crate::Error::msg(format!("token polling failed: {e}")))?;
+        .await;
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
 
     if let Some(s) = &_spinner_guard {
         s.finish_and_clear();
     }
+
+    let token_res: StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType> =
+        poll.map_err(|e| crate::Error::msg(format!("token polling failed: {e}")))?;
 
     if verbose {
         eprintln!("[verbose] token HTTP response (parsed, secrets omitted):");
@@ -240,64 +207,84 @@ fn format_expires_human(expires_at: Option<i64>) -> String {
     }
 }
 
-/// Local mock (`127.0.0.1` / `localhost`): skip browser and show QR in-terminal for demos (e.g. OpenClaw).
-fn local_loopback_auth_base(resolved: &ResolvedAuth) -> bool {
-    matches!(
-        resolved.base.host_str(),
-        Some("127.0.0.1" | "localhost" | "::1")
-    )
-}
-
-/// Unicode block / “character” QR in the terminal (no image file).
-fn print_login_char_qr(auth_url: &str) -> Result<()> {
+fn encode_login_qr_png(auth_url: &str) -> Result<Vec<u8>> {
     let qr = QrCode::new(auth_url.as_bytes())
         .map_err(|e| crate::Error::msg(format!("QR encode failed: {e}")))?;
-    println!("Character QR (unicode):");
-    println!();
-    let dense = qr
-        .render::<unicode::Dense1x2>()
-        .quiet_zone(true)
-        .build();
-    println!("{dense}");
-    Ok(())
-}
-
-/// PNG file path + optional iTerm2 inline image (no browser).
-fn print_login_image_qr(auth_url: &str) -> Result<()> {
-    let qr = QrCode::new(auth_url.as_bytes())
-        .map_err(|e| crate::Error::msg(format!("QR encode failed: {e}")))?;
-
     let luma = qr
         .render::<Luma<u8>>()
         .min_dimensions(120, 120)
         .max_dimensions(360, 360)
         .build();
-
     let mut png = Vec::new();
     image::DynamicImage::ImageLuma8(luma)
         .write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)
         .map_err(|e| crate::Error::msg(format!("encode QR PNG: {e}")))?;
-
-    let path = std::env::temp_dir().join("tcli-wallet-login-qr.png");
-    std::fs::write(&path, &png).map_err(|e| crate::Error::msg(format!("save QR PNG: {e}")))?;
-
-    println!("Image QR (PNG file): {}", path.display());
-
-    try_print_iterm2_inline_png(&png);
-
-    Ok(())
+    Ok(png)
 }
 
-/// iTerm2 / compatible terminals: inline PNG without opening Preview.
-fn try_print_iterm2_inline_png(png: &[u8]) {
-    if std::env::var("ITERM_SESSION_ID").is_err() {
-        return;
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
     }
-    let encoded = base64::engine::general_purpose::STANDARD.encode(png);
-    print!(
-        "\x1b]1337;File=inline=1;width=25%;height=25%;preserveAspectRatio=1:{}:\x07\n",
-        encoded
-    );
+    out
+}
+
+fn login_qr_page_html(verification_code: &str, auth_url: &str, png_base64: &str) -> String {
+    let code_e = html_escape(verification_code);
+    let url_e = html_escape(auth_url);
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>tcli wallet login</title>
+  <style>
+    :root {{ --bg: #0d1117; --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; }}
+    body {{
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }}
+    .card {{
+      max-width: 420px;
+      text-align: center;
+    }}
+    h1 {{ font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; }}
+    .code {{ font-size: 1.5rem; letter-spacing: 0.1em; color: var(--accent); margin: 0.5rem 0 1.25rem; }}
+    a {{ color: var(--accent); }}
+    p.muted {{ color: var(--muted); font-size: 0.9rem; margin-top: 1rem; }}
+    img {{ display: block; margin: 0 auto; max-width: 100%; height: auto; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>tcli — device login</h1>
+    <p class="muted">Verification code</p>
+    <div class="code">{code_e}</div>
+    <p><a href="{url_e}" target="_blank" rel="noopener">Open verification link</a></p>
+    <p class="muted">Scan QR (same as the link above)</p>
+    <img src="data:image/png;base64,{png_base64}" width="320" height="320" alt="Login QR"/>
+    <p class="muted">Keep this terminal running — tcli is polling the token endpoint in the background.</p>
+  </div>
+</body>
+</html>"#
+    )
 }
 
 fn token_expires_at(
