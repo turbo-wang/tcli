@@ -127,7 +127,7 @@ def _verify_page_html(part_a: str, sep: str, part_b: str) -> str:
     <div class="code" aria-label="User code">
       <span class="part">{a}</span><span class="sep">{s}</span><span class="part">{b}</span>
     </div>
-    <p class="hint">Mock server: session auto-approves. You can close this tab — <code>tcli wallet login</code> will finish.</p>
+    <p class="hint">Mock server: session auto-approves after ~5s. You can close this tab — <code>tcli wallet login</code> will finish.</p>
   </div>
 </body>
 </html>"""
@@ -172,7 +172,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/oauth/device":
             device_code = secrets.token_urlsafe(24)
             user_code = random_user_code()
-            PENDING[device_code] = {"until": time.time() + 600.0}
+            # Delay approval so the CLI can show QR + spinner; matches demo "auto login after 5s".
+            PENDING[device_code] = {
+                "until": time.time() + 600.0,
+                "created": time.time(),
+            }
             self._json(
                 200,
                 {
@@ -197,7 +201,11 @@ class Handler(BaseHTTPRequestHandler):
             if not slot:
                 self._json(400, {"error": "invalid_grant"})
                 return
-            # Auto-approve for demo (no separate browser step).
+            created = float(slot.get("created", 0.0))
+            if time.time() - created < 5.0:
+                self._json(400, {"error": "authorization_pending"})
+                return
+            # Auto-approve for demo (browser optional; CLI may show QR instead).
             del PENDING[device_code]
             self._json(
                 200,

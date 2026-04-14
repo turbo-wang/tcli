@@ -1,3 +1,6 @@
+use base64::Engine;
+use image::ImageFormat;
+use image::Luma;
 use oauth2::basic::BasicTokenType;
 use oauth2::devicecode::StandardDeviceAuthorizationResponse;
 use oauth2::reqwest::async_http_client;
@@ -5,6 +8,8 @@ use oauth2::{
     basic::BasicClient, AuthUrl, ClientId, DeviceAuthorizationUrl, EmptyExtraTokenFields, Scope,
     StandardTokenResponse, TokenResponse, TokenUrl,
 };
+use qrcode::QrCode;
+use qrcode::render::unicode;
 
 use crate::config::ResolvedAuth;
 use crate::storage::{OAuthStored, oauth_path, save_oauth};
@@ -66,11 +71,21 @@ pub async fn login(home: &std::path::Path, resolved: &ResolvedAuth, verbose: boo
     println!("Auth URL: {auth_url_line}");
     println!("Verification code: {verification_code}");
     println!();
-    println!("Waiting for authentication...");
-    println!();
 
-    if let Some(uri) = details.verification_uri_complete() {
-        let _ = webbrowser::open(uri.secret().as_str());
+    let loopback_qr_demo = local_loopback_auth_base(resolved);
+    if loopback_qr_demo {
+        // Mock / local auth: no browser — show terminal QR (unicode + PNG / optional iTerm inline).
+        print_login_qr_demo(&auth_url_line)?;
+        println!();
+        println!("Waiting for authentication (mock approves in ~5s)...");
+        println!();
+    } else {
+        println!("Waiting for authentication...");
+        println!();
+
+        if let Some(uri) = details.verification_uri_complete() {
+            let _ = webbrowser::open(uri.secret().as_str());
+        }
     }
 
     let _spinner_guard = if !verbose {
@@ -162,6 +177,61 @@ fn format_expires_human(expires_at: Option<i64>) -> String {
             format!("{mins}m")
         }
     }
+}
+
+/// Local mock (`127.0.0.1` / `localhost`): skip browser and show QR in-terminal for demos (e.g. OpenClaw).
+fn local_loopback_auth_base(resolved: &ResolvedAuth) -> bool {
+    matches!(
+        resolved.base.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    )
+}
+
+/// Unicode block QR plus PNG file; on iTerm2 also emits an inline image sequence.
+fn print_login_qr_demo(auth_url: &str) -> Result<()> {
+    let qr = QrCode::new(auth_url.as_bytes())
+        .map_err(|e| crate::Error::msg(format!("QR encode failed: {e}")))?;
+
+    println!("Character QR (unicode):");
+    println!();
+    let dense = qr
+        .render::<unicode::Dense1x2>()
+        .quiet_zone(true)
+        .build();
+    println!("{dense}");
+
+    let luma = qr
+        .render::<Luma<u8>>()
+        .min_dimensions(120, 120)
+        .max_dimensions(360, 360)
+        .build();
+
+    let mut png = Vec::new();
+    image::DynamicImage::ImageLuma8(luma)
+        .write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)
+        .map_err(|e| crate::Error::msg(format!("encode QR PNG: {e}")))?;
+
+    let path = std::env::temp_dir().join("tcli-wallet-login-qr.png");
+    std::fs::write(&path, &png).map_err(|e| crate::Error::msg(format!("save QR PNG: {e}")))?;
+
+    println!();
+    println!("Image QR (PNG file): {}", path.display());
+
+    try_print_iterm2_inline_png(&png);
+
+    Ok(())
+}
+
+/// iTerm2 / compatible terminals: inline PNG without opening Preview.
+fn try_print_iterm2_inline_png(png: &[u8]) {
+    if std::env::var("ITERM_SESSION_ID").is_err() {
+        return;
+    }
+    let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+    print!(
+        "\x1b]1337;File=inline=1;width=25%;height=25%;preserveAspectRatio=1:{}:\x07\n",
+        encoded
+    );
 }
 
 fn token_expires_at(
