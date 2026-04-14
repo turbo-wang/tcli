@@ -7,9 +7,11 @@
 #   TCLI_RELEASE_REPO=owner/repo TCLI_VERSION=v0.1.0 ./scripts/install.sh --release
 set -euo pipefail
 
-TCLIUP_INSTALLER_VERSION="0.1.1"
+TCLIUP_INSTALLER_VERSION="0.1.2"
 REPO="${TCLI_RELEASE_REPO:-}"
-BIN_DIR="${TCLI_BIN_DIR:-$HOME/.tcli/bin}"
+TCLI_DIR="${TCLI_DIR:-$HOME/.tcli}"
+BIN_DIR="${TCLI_BIN_DIR:-$TCLI_DIR/bin}"
+ENV_FILE="$TCLI_DIR/env"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,9 +39,11 @@ Options:
   -i, --install    Version tag to install with --release (e.g. v0.1.0); default: latest
 
 Environment:
-  TCLI_BIN_DIR      Install directory (default: \$HOME/.tcli/bin)
-  TCLI_RELEASE_REPO GitHub repo for --release, e.g. turbo-wang/tcli
-  GITHUB_TOKEN      Optional token for private repos / rate limits
+  TCLI_DIR              Config/state directory (default: \$HOME/.tcli); holds env file for PATH
+  TCLI_BIN_DIR          Install directory (default: \$TCLI_DIR/bin)
+  TCLI_RELEASE_REPO     GitHub repo for --release, e.g. turbo-wang/tcli
+  TCLI_NO_MODIFY_PROFILE  Set to 1 to skip editing ~/.zshrc, ~/.bashrc, etc.
+  GITHUB_TOKEN          Optional token for private repos / rate limits
 
 Examples:
   ./scripts/install.sh
@@ -113,15 +117,29 @@ detect_target() {
 get_latest_tag() {
   [[ -n "$REPO" ]] || error "Set TCLI_RELEASE_REPO=owner/repo for --release installs."
   command -v curl >/dev/null 2>&1 || error "curl required for release install"
-  local url="https://api.github.com/repos/$REPO/releases/latest"
-  local tag json
+  local url json tag code tmp
+  tmp="$(mktemp)"
+  url="https://api.github.com/repos/$REPO/releases/latest"
   if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    json="$(curl -fsSL -H "Authorization: token $GITHUB_TOKEN" "$url")"
+    code="$(curl -sS -o "$tmp" -w "%{http_code}" -H "Authorization: token $GITHUB_TOKEN" "$url")"
   else
-    json="$(curl -fsSL "$url")"
+    code="$(curl -sS -o "$tmp" -w "%{http_code}" "$url")"
   fi
+  if [[ "$code" == "200" ]]; then
+    json="$(cat "$tmp")"
+  else
+    url="https://api.github.com/repos/$REPO/releases?per_page=20"
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+      code="$(curl -sS -o "$tmp" -w "%{http_code}" -H "Authorization: token $GITHUB_TOKEN" "$url")"
+    else
+      code="$(curl -sS -o "$tmp" -w "%{http_code}" "$url")"
+    fi
+    [[ "$code" == "200" ]] || error "GitHub API error ($code) for $REPO releases. Try GITHUB_TOKEN if rate-limited."
+    json="$(cat "$tmp")"
+  fi
+  rm -f "$tmp"
   tag="$(echo "$json" | grep '"tag_name":' | head -n1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
-  [[ -n "$tag" ]] || error "Could not resolve latest release tag for $REPO"
+  [[ -n "$tag" ]] || error "Could not resolve a release tag for $REPO"
   echo "$tag"
 }
 
@@ -188,21 +206,95 @@ install_from_source() {
   info "Installed $dest"
 }
 
+write_env_files() {
+  mkdir -p "$TCLI_DIR"
+  cat > "$ENV_FILE" <<EOF
+# tcli shell setup (added by install.sh)
+export PATH="$BIN_DIR:\$PATH"
+EOF
+  cat > "$ENV_FILE.fish" <<EOF
+# tcli shell setup (added by install.sh)
+fish_add_path -g '$BIN_DIR'
+EOF
+}
+
+configure_shell() {
+  local source_line=". \"$ENV_FILE\""
+  local shell_configs=()
+  if [[ -n "${ZDOTDIR:-}" ]]; then
+    shell_configs+=("$ZDOTDIR/.zshenv")
+  fi
+  if [[ -f "$HOME/.zshenv" ]] || [[ "$(basename "${SHELL:-}")" == "zsh" ]]; then
+    shell_configs+=("$HOME/.zshenv")
+  fi
+  if [[ -f "$HOME/.bashrc" ]] || [[ "$(basename "${SHELL:-}")" == "bash" ]]; then
+    shell_configs+=("$HOME/.bashrc")
+  fi
+  if [[ -f "$HOME/.bash_profile" ]]; then
+    shell_configs+=("$HOME/.bash_profile")
+  fi
+  if [[ -f "$HOME/.profile" ]]; then
+    shell_configs+=("$HOME/.profile")
+  fi
+  local unique_configs=() seen=""
+  for cfg in "${shell_configs[@]}"; do
+    case "$seen" in
+      *"|$cfg|"*) ;;
+      *) seen="$seen|$cfg|"; unique_configs+=("$cfg") ;;
+    esac
+  done
+  local modified=0
+  for cfg in "${unique_configs[@]}"; do
+    if [[ -f "$cfg" ]] && grep -qF "$ENV_FILE" "$cfg" 2>/dev/null; then
+      continue
+    fi
+    echo >> "$cfg"
+    echo "# Added by tcli installer" >> "$cfg"
+    echo "$source_line" >> "$cfg"
+    info "Added tcli to PATH in $cfg"
+    modified=1
+  done
+  local fish_config="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/tcli.fish"
+  if [[ -d "$(dirname "$fish_config")" ]] || [[ "$(basename "${SHELL:-}")" == "fish" ]]; then
+    if [[ ! -f "$fish_config" ]] || ! grep -qF "$ENV_FILE.fish" "$fish_config" 2>/dev/null; then
+      mkdir -p "$(dirname "$fish_config")"
+      echo "# Added by tcli installer" > "$fish_config"
+      echo "source $ENV_FILE.fish" >> "$fish_config"
+      info "Added tcli to PATH in $fish_config"
+      modified=1
+    fi
+  fi
+  if [[ $modified -eq 0 ]]; then
+    info "tcli PATH is already configured in your shell startup files (or run again after creating a shell config)"
+  fi
+}
+
 main() {
   info "tcli installer $TCLIUP_INSTALLER_VERSION"
+  mkdir -p "$TCLI_DIR"
   if [[ "$FROM_RELEASE" -eq 1 ]]; then
     install_from_release
   else
     install_from_source
   fi
 
+  write_env_files
+  export PATH="$BIN_DIR:$PATH"
+
+  if [[ "${TCLI_NO_MODIFY_PROFILE:-}" != "1" ]]; then
+    configure_shell
+  fi
+
   echo ""
-  if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-    warn "$BIN_DIR is not in your PATH"
-    echo "  export PATH=\"$BIN_DIR:\$PATH\""
-    echo ""
+  if command -v tcli >/dev/null 2>&1; then
+    info "tcli is on PATH in this session. Try: tcli --help"
   else
-    info "Run: tcli --help"
+    warn "Could not find tcli on PATH in this session."
+  fi
+  if [[ "$(basename "${SHELL:-}")" == "fish" ]]; then
+    info "New terminals: restart the terminal or run: source $ENV_FILE.fish"
+  else
+    info "New terminals: restart the terminal or run: source $ENV_FILE"
   fi
 }
 

@@ -11,7 +11,10 @@
 # Optional:
 #   TCLI_INSTALL_REF=main|master|v0.1.0-branch   (default: main)
 #   TCLI_BIN_DIR=~/.local/bin
+#   TCLI_NO_MODIFY_PROFILE=1   (do not edit ~/.zshrc, ~/.bashrc, etc.)
 #   TCLI_BUILD_FROM_SOURCE=1   (skip GitHub Release; build with cargo — requires Rust)
+#
+# After install: ~/.tcli/env is written and POSIX/fish shell configs get a PATH hook (tempo-style).
 #
 # Remote install tries prebuilt binaries first (no Rust). Publish v* releases with workflow
 # assets (.github/workflows/release.yml) or pass TCLI_BUILD_FROM_SOURCE=1 to compile.
