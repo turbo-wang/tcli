@@ -13,7 +13,7 @@ pub fn guide_text() -> &'static str {
 
 tcli — same command names where applicable; implementation differs:
   tcli wallet login | logout — OAuth2 device flow (QR under ~/.openclaw/workspace/tcli-login/<session>/; stdout = PNG path only; same session dir gets result.json after background poll); token in ~/.tcli/wallet/oauth.json
-  tcli wallet whoami | balance    — OAuth session / readiness (not on-chain balances)
+  tcli wallet whoami | balance    — local token file + expiry only (no backend whoami API); use `tcli wallet login` when you need a new session
   tcli wallet keys|fund|transfer|services|sessions|mpp-sign  — stubs; need Tempo Wallet + `tempo`
   tcli request                    — curl-like; demo x402 + payment-token; MPP not signed here
 

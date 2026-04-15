@@ -2,30 +2,31 @@
 //! On-chain / passkey / MPP features require the official `tempo` binary — see handler text.
 
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::storage::{load_oauth, oauth_path};
+use crate::storage::load_oauth;
 use crate::Result;
 
+/// Local session only: there is no whoami endpoint in PAY / redot-api for Bearer checks.
+/// For a fresh server-side session, run `tcli wallet login`.
 pub fn whoami(home: &Path) -> Result<()> {
-    let path = oauth_path(home);
-    match load_oauth(home)? {
-        Some(_) => {
-            println!("tcli wallet whoami (OAuth2 session — not Tempo passkey wallet)");
-            println!("  logged_in: true");
-            println!("  ready: true");
-            println!("  token_store: {}", path.display());
-            println!();
-            println!("Official Tempo CLI shows address, balances, and key state:");
-            println!("  tempo wallet whoami");
-            println!("Docs: https://docs.tempo.xyz/cli/wallet#check-balances");
-        }
-        None => {
-            println!("logged_in: false");
-            println!("ready: false");
-            println!();
-            println!("Run `tcli wallet login` for an OAuth demo session, or use `tempo wallet login` for Tempo Wallet.");
+    let Some(session) = load_oauth(home)? else {
+        println!("not logged in");
+        return Ok(());
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if let Some(exp) = session.expires_at {
+        if now > exp {
+            println!("not logged in");
+            return Ok(());
         }
     }
+
+    println!("ok");
     Ok(())
 }
 

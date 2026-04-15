@@ -379,12 +379,3 @@ device_name = "YourDevice"
 `deviceSn` 由 tcli 首次运行时写入 `$TCLI_HOME/device_sn` 并复用。也可用环境变量 `TCLI_AUTH_BASE=https://app.rp-2023app.com` 覆盖 `base`（路径仍取自配置文件中的 `device_authorization_path` / `token_path`）。
 
 本地若对接**非**本文路径的临时服务（例如仓库内其它脚本），只需在 `config.toml` 里改写 `device_authorization_path` / `token_path`；**与后端契约以本文为准**。
-
-### 与本文档接口是否「即插即用」
-
-| 环节 | 说明 |
-| --- | --- |
-| **URL** | 无 `config.toml` 时 tcli 默认 `[auth].base` 为 **`https://app.rp-2023app.com`**，`device_authorization_path` / `token_path` 与 **§1 / §2** 一致；其它环境可用 `TCLI_AUTH_BASE` 或 `config.toml` 中的 `base` 覆盖。 |
-| **Device Authorization 请求体** | **tcli** 使用 **POST `application/json`**，字段与 **§1** 对齐：`client_id`、`appName`、`publicKey`（可为空串）、`deviceName`、`deviceSn`、`timestamp`（毫秒）、可选 `scope`。响应按 OAuth 字段解析为 RFC 8628 结构。 |
-| **Token 轮询** | **§2**：tcli 以 **`application/json`** 发送 `OAuthDeviceTokenRequest`（`grant_type`、`device_code`、`client_id`）轮询 `token`；**在 `device_authorization` 响应的 `expires_in` 截止前**持续轮询，间隔取响应中的 `interval`（不低于 **1s**）。成功响应若含 `pay_authorization_credential` 等扩展字段，tcli 当前仅将 `access_token` 等写入 `oauth.json`，扩展字段可后续扩展。 |
-
