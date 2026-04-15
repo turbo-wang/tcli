@@ -12,6 +12,9 @@ pub struct ResolvedAuth {
     pub token_url: url::Url,
     pub payment_token_url: Option<url::Url>,
     pub payment_token_disabled: bool,
+    pub app_name: String,
+    pub device_name: String,
+    pub oauth_scope: Option<String>,
 }
 
 fn join_base(base: &url::Url, path: &str) -> Result<url::Url> {
@@ -47,6 +50,9 @@ pub fn resolve(cfg: &ConfigFile) -> Result<ResolvedAuth> {
         token_url,
         payment_token_url,
         payment_token_disabled,
+        app_name: cfg.auth.app_name.clone(),
+        device_name: cfg.auth.device_name.clone(),
+        oauth_scope: cfg.auth.oauth_scope.clone(),
     })
 }
 

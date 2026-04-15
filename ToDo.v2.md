@@ -32,8 +32,6 @@ tcli/src/
 ├── api.rs            # tcli request：402、payment-token、x402、verbose
 ├── x402.rs           # 402 体解析、MPP 检测文案
 └── tempo_reference.rs # `tcli guide` 文案（官方 tempo 命令对照）
-
-mock_backend/auth_service/main.py  # 设备流 + POST /issue-token（与 AUTH_PUBLIC_BASE 一致）
 ```
 
 ## 4. 已实现功能摘要
@@ -55,9 +53,9 @@ mock_backend/auth_service/main.py  # 设备流 + POST /issue-token（与 AUTH_PU
 - **curl 风格**：`-X`/`--request`、`--json`、`-d`（可重复）、`-H`、`--timeout`、`--dry-run`、`--max-spend` / `TCLI_MAX_SPEND`、**`-v`**（响应元数据走 **stderr**，body 走 **stdout** 便于管道）。
 - **默认方法**：无 `-X` 时，有 `--json` 或 `-d` 则 **POST**，否则 **GET**。
 - **402 处理顺序**（与真实 `tempo request` 差异见下）：
-  1. **Payment token（demo）**：`POST` **`{auth_base}/issue-token`**，body 为 `{"original_url","response_status","response_body"}`；`auth_base` 与 **`tcli wallet login` 同源**：`TCLI_AUTH_BASE` → `[auth].base` → 默认 `http://127.0.0.1:8000`。成功则取 `payment_token`，原请求重试时带 **`X-Payment-Token`**（可用 `--payment-token-header` 改名）。  
+  1. **Payment token（demo）**：`POST` **`{auth_base}/issue-token`**，body 为 `{"original_url","response_status","response_body"}`；`auth_base` 与 **`tcli wallet login` 同源**：`TCLI_AUTH_BASE` → `[auth].base` → 默认 **`https://app.rp-2023app.com`**。成功则取 `payment_token`，原请求重试时带 **`X-Payment-Token`**（可用 `--payment-token-header` 改名）。  
      - **`~/.tcli/config.toml`**：`[payment_token] url` 可覆盖完整 URL；**`disable = true`** 则跳过此步。  
-     - **`POST /issue-token` 失败**（如 mock 未启动）：不中断，**继续**后续逻辑（verbose 下打印说明）。
+     - **`POST /issue-token` 失败**：不中断，**继续**后续逻辑（verbose 下打印说明）。
   2. **MPP**：若存在 **`WWW-Authenticate: Payment …`** → 报错并指向 **`tempo request`** / mpp.dev（demo 无法链上签名）。若已做过 payment-token 重试仍 MPP → 使用**另一段**说明文案。
   3. **Legacy x402 demo**：若 body 为 `{"x402":{...}}`，则校验 **`--max-spend`**、需已登录会话，重试带 **`X-x402-Accept`**。
   4. **Problem JSON**（如 `challengeId` + payment-required）：按 MPP 类处理 → 同上，指向官方 Tempo CLI。
@@ -66,17 +64,12 @@ mock_backend/auth_service/main.py  # 设备流 + POST /issue-token（与 AUTH_PU
 
 - 打印官方 **`tempo wallet` / `tempo request`** 等能力摘要，以及 **`tcli` 能力与差异**（便于对照实现）。
 
-### 4.5 `mock_backend`
-
-- **OAuth**：与 `tcli` 默认端口一致时，`AUTH_PUBLIC_BASE` 与 **`TCLI_AUTH_BASE` / `[auth].base`** 对齐。
-- **`POST /issue-token`**：返回 JSON `payment_token`、`issuer_base`；供 `tcli request` 402 链路演示。
-
 ## 5. 与官方 Tempo 的差异（必读）
 
 | 能力 | 官方 `tempo request` | 当前 `tcli` |
 |------|----------------------|-------------|
 | 402 / MPP | 解析 `WWW-Authenticate: Payment`，钱包签名，`Authorization: Payment` | **不**实现链上支付；检测到 MPP 则**报错并引导使用 `tempo request`** |
-| 402 / demo | 视产品而定 | **x402 JSON** + **`X-x402-Accept`** 重试；**issue-token** + **`X-Payment-Token`** 为 **mock 演示** |
+| 402 / demo | 视产品而定 | **x402 JSON** + **`X-x402-Accept`** 重试；**issue-token** + **`X-Payment-Token`** 为服务端提供的演示/兼容路径（与 `auth_base` 同源） |
 | 钱包 | Passkey / Tempo 托管链上密钥 | OAuth **Bearer** 会话 + 磁盘 token |
 
 ## 6. 配置与环境（摘要）
@@ -91,9 +84,7 @@ mock_backend/auth_service/main.py  # 设备流 + POST /issue-token（与 AUTH_PU
 ## 7. 测试分层（仓库内）
 
 - `tests/phase1_*`：CLI 解析与 help  
-- `tests/phase2_*`：Device Flow（wiremock）  
 - `tests/phase3_*`：config.toml 与 env  
-- `tests/phase4_*`：402、x402、MPP 检测、payment-token wiremock  
 
 ## 8. 待办 / 可增强项
 

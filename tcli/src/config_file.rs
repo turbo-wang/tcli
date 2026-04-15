@@ -21,10 +21,19 @@ pub struct AuthSection {
     pub device_authorization_path: String,
     #[serde(default = "default_token_path")]
     pub token_path: String,
+    /// `appName` in POST /api/v1/oauth/device_authorization (see PAY_AUTHORIZATION_AND_OAUTH_DEVICE_API.md).
+    #[serde(default = "default_app_name")]
+    pub app_name: String,
+    /// `deviceName` in the same request.
+    #[serde(default = "default_device_name")]
+    pub device_name: String,
+    /// Optional `scope` on device authorization (omit from JSON when unset).
+    #[serde(default)]
+    pub oauth_scope: Option<String>,
 }
 
 fn default_auth_base() -> String {
-    "http://127.0.0.1:8000".to_string()
+    "https://app.rp-2023app.com".to_string()
 }
 
 fn default_client_id() -> String {
@@ -32,11 +41,19 @@ fn default_client_id() -> String {
 }
 
 fn default_device_path() -> String {
-    "/oauth/device".to_string()
+    "/api/v1/oauth/device_authorization".to_string()
 }
 
 fn default_token_path() -> String {
-    "/oauth/token".to_string()
+    "/api/v1/oauth/token".to_string()
+}
+
+fn default_app_name() -> String {
+    "tcli".to_string()
+}
+
+fn default_device_name() -> String {
+    "tcli-device".to_string()
 }
 
 impl Default for AuthSection {
@@ -46,6 +63,9 @@ impl Default for AuthSection {
             client_id: default_client_id(),
             device_authorization_path: default_device_path(),
             token_path: default_token_path(),
+            app_name: default_app_name(),
+            device_name: default_device_name(),
+            oauth_scope: None,
         }
     }
 }

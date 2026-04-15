@@ -15,6 +15,34 @@ pub struct OAuthStored {
     pub expires_at: Option<i64>,
 }
 
+/// Stable device id for OAuth Device `deviceSn` (persisted under `home/device_sn`).
+pub fn ensure_device_sn(home: &Path) -> Result<String> {
+    let p = home.join("device_sn");
+    if p.exists() {
+        let s = fs::read_to_string(&p)?;
+        let t = s.trim();
+        if !t.is_empty() {
+            return Ok(t.to_string());
+        }
+    }
+    if let Some(parent) = p.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let x = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+        ^ ((std::process::id() as u64) << 32);
+    let sn = format!("tcli-{x:016x}");
+    fs::write(&p, sn.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&p, fs::Permissions::from_mode(0o600));
+    }
+    Ok(sn)
+}
+
 pub fn tcli_home() -> PathBuf {
     std::env::var("TCLI_HOME")
         .map(PathBuf::from)
