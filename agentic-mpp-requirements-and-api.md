@@ -106,7 +106,7 @@ Agentic MPP 文档范围以 **OAuth 路径**为主。
 
 | 字段           | 类型     | 必填  | 说明                                                         |
 | ------------ | ------ | --- | ---------------------------------------------------------- |
-| `client_id`  | string | 是   | 客户端标识；若配置 `pay.oauth.device.allowed-client-ids`（非空），须命中白名单 |
+| `client_id`  | string | 是   | 客户端标识；若配置 `pay.oauth.device.allowed-client-ids`（非空），须命中白名单（常见项如 **`OpenClaw`**；tcli 默认 `client_id` 与之对齐） |
 | `appName`    | string | 是   | 应用/技能名称                                                    |
 | `publicKey`  | string | 否   | 可选；无设备签名场景可传 `""`                                          |
 | `deviceName` | string | 是   | 设备名称                                                       |

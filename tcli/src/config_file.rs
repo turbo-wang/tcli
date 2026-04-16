@@ -37,7 +37,8 @@ fn default_auth_base() -> String {
 }
 
 fn default_client_id() -> String {
-    "tcli".to_string()
+    // Must match `pay.oauth.device.allowed-client-ids` on the API (e.g. OpenClaw for production).
+    "OpenClaw".to_string()
 }
 
 fn default_device_path() -> String {

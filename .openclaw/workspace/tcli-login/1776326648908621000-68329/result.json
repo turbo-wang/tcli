@@ -1,0 +1,4 @@
+{
+  "message": "token polling: device session expired (device_authorization expires_in elapsed)",
+  "status": "error"
+}

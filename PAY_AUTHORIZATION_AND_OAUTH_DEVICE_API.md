@@ -369,7 +369,7 @@ curl -sS "${BASE_URL}/api/v1/pay/authorization/qr/get?qrCode=redotpay%3Axxxxxxxx
 ```toml
 [auth]
 base = "https://app.rp-2023app.com"
-client_id = "<须在 pay.oauth.device.allowed-client-ids 白名单内>"
+client_id = "OpenClaw"
 device_authorization_path = "/api/v1/oauth/device_authorization"
 token_path = "/api/v1/oauth/token"
 app_name = "YourApp"

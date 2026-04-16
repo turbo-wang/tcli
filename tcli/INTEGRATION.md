@@ -24,7 +24,7 @@
 默认由程序内置；可通过 `config.toml` 或环境变量覆盖。
 
 - **`TCLI_AUTH_BASE`**：覆盖 `[auth].base`（OAuth 服务根 URL）。
-- **`[auth]`**：`base`、`client_id`、`device_authorization_path`、`token_path`、`app_name`、`device_name`、可选 `oauth_scope` 等，与设备授权 / token 请求一致即可。
+- **`[auth]`**：`base`、`client_id`（内置默认 **`OpenClaw`**，与线上一类环境的 `allowed-client-ids` 对齐；可覆盖）、`device_authorization_path`、`token_path`、`app_name`、`device_name`、可选 `oauth_scope` 等，与设备授权 / token 请求一致即可。
 
 具体键名与默认值见源码 `tcli/src/config_file.rs`。
 

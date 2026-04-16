@@ -22,7 +22,7 @@ Differences vs tempo request:
   • Demo paths: POST {auth}/issue-token → X-Payment-Token; legacy {"x402":…} → X-x402-Accept
 
 Configuration:
-  ~/.tcli/config.toml [auth] base (default https://app.rp-2023app.com), client_id, paths, app_name, device_name; TCLI_AUTH_BASE overrides base; [payment_token] url / disable
+  ~/.tcli/config.toml [auth] base (default https://app.rp-2023app.com), client_id (default OpenClaw), paths, app_name, device_name; TCLI_AUTH_BASE overrides base; [payment_token] url / disable
   Login: stdout = PNG path + MEDIA: + VERIFICATION_CODE: lines; stderr = plain-English steps (scan QR, timing from server) and path to result.json; read result.json once after (ok | error).
 
 Docs: https://docs.tempo.xyz/cli/wallet
