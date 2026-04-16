@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::storage::load_oauth;
 use crate::Result;
 
-/// Local session only: there is no whoami endpoint in PAY / redot-api for Bearer checks.
+/// Local session only: no server whoami call (no Bearer introspection path in use).
 /// For a fresh server-side session, run `tcli wallet login`.
 pub fn whoami(home: &Path) -> Result<()> {
     let Some(session) = load_oauth(home)? else {

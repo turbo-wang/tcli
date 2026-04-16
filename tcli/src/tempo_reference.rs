@@ -12,7 +12,7 @@ pub fn guide_text() -> &'static str {
   tempo request  — HTTP + MPP signing
 
 tcli — same command names where applicable; implementation differs:
-  tcli wallet login | logout — OAuth2 device flow (QR under ~/.openclaw/workspace/tcli-login/<session>/; stdout = PNG path only; same session dir gets result.json after background poll); token in ~/.tcli/wallet/oauth.json
+  tcli wallet login | logout — OAuth2 device flow (QR under ~/.openclaw/workspace/tcli-login/<session>/; stdout = path, MEDIA:path, VERIFICATION_CODE:…; same session dir gets result.json after background poll); token in ~/.tcli/wallet/oauth.json
   tcli wallet whoami | balance    — local token file + expiry only (no backend whoami API); use `tcli wallet login` when you need a new session
   tcli wallet keys|fund|transfer|services|sessions|mpp-sign  — stubs; need Tempo Wallet + `tempo`
   tcli request                    — curl-like; demo x402 + payment-token; MPP not signed here
@@ -23,7 +23,7 @@ Differences vs tempo request:
 
 Configuration:
   ~/.tcli/config.toml [auth] base (default https://app.rp-2023app.com), client_id, paths, app_name, device_name; TCLI_AUTH_BASE overrides base; [payment_token] url / disable
-  Login: stdout = QR PNG path only; stderr lists verification_code, auth_url, and path to result.json; after the command returns, read that result.json once (ok | error) — see PAY_AUTHORIZATION_AND_OAUTH_DEVICE_API.md.
+  Login: stdout = PNG path + MEDIA: + VERIFICATION_CODE: lines; stderr = plain-English steps (scan QR, timing from server) and path to result.json; read result.json once after (ok | error).
 
 Docs: https://docs.tempo.xyz/cli/wallet
 "#

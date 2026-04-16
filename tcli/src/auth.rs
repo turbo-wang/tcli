@@ -55,7 +55,7 @@ fn enrich_oauth_failure(message: String, auth_base: &url::Url) -> String {
 /// How the device-flow token poll is run after the QR step.
 #[derive(Debug, Clone, Copy)]
 pub struct LoginOptions {
-    /// When `true` (default for CLI), print the QR PNG path on stdout and spawn a detached
+    /// When `true` (default for CLI), print QR path, `MEDIA:`, and `VERIFICATION_CODE:` lines on stdout and spawn a detached
     /// `tcli wallet login --poll-state …` process to poll the token endpoint. When `false` (e.g.
     /// integration tests), poll in the current task so the process does not exit before tokens are saved.
     pub detach_poll: bool,
@@ -238,7 +238,7 @@ pub async fn login_poll_from_state_file(state_path: &Path, verbose: bool) -> Res
     }
 }
 
-/// POST JSON per PAY_AUTHORIZATION_AND_OAUTH_DEVICE_API.md §1 (`appName`, `deviceSn`, `timestamp`, …).
+/// POST JSON for device authorization (`appName`, `deviceSn`, `timestamp`, …).
 #[derive(Serialize)]
 struct DeviceAuthorizationJsonBody<'a> {
     client_id: &'a str,
@@ -313,7 +313,7 @@ async fn request_device_authorization(
     })
 }
 
-/// OAuth2 device authorization: write QR under OpenClaw workspace, print **only** the PNG path on stdout (detached poll), then poll the token endpoint (inline or subprocess).
+/// OAuth2 device authorization: write QR under OpenClaw workspace; on stdout print path, `MEDIA:`, and `VERIFICATION_CODE:` lines, then poll (detached or in-process).
 /// With `verbose`, prints OAuth endpoints and response metadata on stderr (no access_token body).
 pub async fn login(
     home: &std::path::Path,
@@ -357,20 +357,14 @@ pub async fn login(
             .parent()
             .ok_or_else(|| crate::Error::msg("login QR path has no parent directory"))?;
         let state_path = write_poll_state(home, resolved, &details, artifact_dir)?;
-        println!("{}", qr_path.display());
-        eprintln!("verification_code: {verification_code}");
-        eprintln!("auth_url: {auth_url_line}");
-        eprintln!(
-            "QR PNG path was printed on stdout; file on disk: {}",
-            qr_path.display()
-        );
-        eprintln!(
-            "When polling finishes, read once: {}",
-            artifact_dir.join("result.json").display()
-        );
+        let qr_abs = qr_path.display();
+        println!("{qr_abs}");
+        println!("MEDIA:{qr_abs}");
+        println!("VERIFICATION_CODE:{verification_code}");
+        let result_json = artifact_dir.join("result.json");
+        eprint_login_qr_user_instructions(&details, &result_json);
 
         spawn_poll_child(&state_path)?;
-        eprintln!("Polling token endpoint in the background until login completes or expires.");
     } else {
         if verbose {
             eprintln!("[verbose] Polling token_url in-process (detach_poll=false)…");
@@ -398,7 +392,7 @@ fn spawn_poll_child(state_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// POST `/oauth/token` body — PAY doc §2 `OAuthDeviceTokenRequest` (JSON; same three fields as form).
+/// POST `/oauth/token` body — `OAuthDeviceTokenRequest` JSON (`grant_type`, `device_code`, `client_id`).
 #[derive(Serialize)]
 struct DeviceTokenRequestBody<'a> {
     grant_type: &'a str,
@@ -603,9 +597,13 @@ async fn exchange_device_token(
     let interval_secs = interval.as_secs().max(1);
     let expires_secs = expires_in.as_secs();
 
+    let total_min = std::cmp::max(1u64, expires_secs.saturating_add(59) / 60);
+    eprintln!();
     eprintln!(
-        "[tcli] oauth token poll: session expires in {expires_secs}s (interval {interval_secs}s, from device_authorization)"
+        "Still waiting for you to approve in the app… checking about every {} second(s), for up to {} minute(s) in total.",
+        interval_secs, total_min
     );
+    eprintln!();
 
     if verbose {
         eprintln!("[verbose] Polling token_url until authorization completes…");
@@ -625,7 +623,7 @@ async fn exchange_device_token(
 
         poll_round += 1;
 
-        // §2: JSON body only (`grant_type`, `device_code`, `client_id`) — matches `OAuthDeviceTokenRequest`.
+        // JSON body: `grant_type`, `device_code`, `client_id` (OAuth device token request).
         let body = DeviceTokenRequestBody {
             grant_type: DEVICE_GRANT_TYPE,
             device_code,
@@ -801,6 +799,34 @@ fn format_expires_human(expires_at: Option<i64>) -> String {
             format!("{mins}m")
         }
     }
+}
+
+/// Friendly stderr after stdout lines: path, `MEDIA:…`, `VERIFICATION_CODE:…` (uses server `interval` / `expires_in`).
+fn eprint_login_qr_user_instructions(
+    details: &StandardDeviceAuthorizationResponse,
+    result_json: &Path,
+) {
+    let mut interval = details.interval();
+    if interval < Duration::from_secs(1) {
+        interval = Duration::from_secs(1);
+    }
+    let interval_secs = interval.as_secs().max(1);
+    let expires_secs = details.expires_in().as_secs();
+    let total_min = std::cmp::max(1u64, expires_secs.saturating_add(59) / 60);
+
+    eprintln!();
+    eprintln!("Scan the QR code with your phone to sign in to tcli.");
+    eprintln!("Match the verification code to what you see in the app (also printed on stdout as VERIFICATION_CODE:…).");
+    eprintln!();
+    eprintln!(
+        "After you approve in the app, login completes automatically. We check about every {} second(s), for up to {} minute(s) in total.",
+        interval_secs, total_min
+    );
+    eprintln!(
+        "Stdout has the QR path, MEDIA: line, and VERIFICATION_CODE: line. When finished, read this file once: {}",
+        result_json.display()
+    );
+    eprintln!();
 }
 
 fn encode_login_qr_png(auth_url: &str) -> Result<Vec<u8>> {

@@ -300,7 +300,7 @@ main() {
   fi
   echo ""
   info "Wallet OAuth: default API host is https://app.rp-2023app.com (no config file needed for production)."
-  info "Override auth base with: export TCLI_AUTH_BASE=... or [auth] base in $TCLI_DIR/config.toml. See PAY_AUTHORIZATION_AND_OAUTH_DEVICE_API.md."
+  info "Override auth base with: export TCLI_AUTH_BASE=... or [auth] base in $TCLI_DIR/config.toml."
 }
 
 main

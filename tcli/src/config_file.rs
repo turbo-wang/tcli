@@ -21,7 +21,7 @@ pub struct AuthSection {
     pub device_authorization_path: String,
     #[serde(default = "default_token_path")]
     pub token_path: String,
-    /// `appName` in POST /api/v1/oauth/device_authorization (see PAY_AUTHORIZATION_AND_OAUTH_DEVICE_API.md).
+    /// `appName` in POST /api/v1/oauth/device_authorization.
     #[serde(default = "default_app_name")]
     pub app_name: String,
     /// `deviceName` in the same request.
