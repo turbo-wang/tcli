@@ -148,20 +148,48 @@ fn poll_state_path(home: &Path) -> PathBuf {
     home.join("wallet").join(".device_login_poll.json")
 }
 
-/// Writes the login QR under `~/.openclaw/workspace/tcli-login/<session>/` (see [`crate::storage::openclaw_login_qr_png_path`]).
-fn write_login_qr_png_file(png: &[u8], verbose: bool) -> Result<PathBuf> {
-    let path = crate::storage::openclaw_login_qr_png_path();
+/// Writes the login QR under `~/.openclaw/workspace/tcli-login/<session>/login_qr.png` when possible;
+/// if that fails (permissions, missing home, sandbox), falls back to `<TCLI_HOME>/workspace/tcli-login/<session>/login_qr.png`
+/// using the **same** session id so `result.json` and the poll child stay consistent.
+fn write_login_qr_png_file(png: &[u8], home: &Path, verbose: bool) -> Result<PathBuf> {
+    let session = crate::storage::new_login_qr_session_id();
+    let primary = crate::storage::openclaw_login_qr_png_path_for_session(&session);
+    let first = try_write_login_qr_png_at(&primary, png, verbose);
+    let e1 = match first {
+        Ok(path) => return Ok(path),
+        Err(e) => e,
+    };
+
+    let fallback = crate::storage::tcli_workspace_login_qr_png_path(home, &session);
+    if verbose {
+        eprintln!("[verbose] login QR primary path failed: {e1}");
+        eprintln!("[verbose] trying fallback: {}", fallback.display());
+    } else {
+        eprintln!(
+            "Could not write login QR under {} ({e1}). Trying TCLI_HOME workspace…",
+            primary.parent().unwrap_or(&primary).display()
+        );
+    }
+    try_write_login_qr_png_at(&fallback, png, verbose).map_err(|e2| {
+        crate::Error::msg(format!(
+            "login QR: OpenClaw path failed ({e1}); fallback path {} failed ({e2})",
+            fallback.display()
+        ))
+    })
+}
+
+fn try_write_login_qr_png_at(path: &Path, png: &[u8], verbose: bool) -> Result<PathBuf> {
     if verbose {
         eprintln!("[verbose] login QR output path: {}", path.display());
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(crate::Error::Io)?;
     }
-    std::fs::write(&path, png).map_err(crate::Error::Io)?;
+    std::fs::write(path, png).map_err(crate::Error::Io)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644));
     }
     path.canonicalize().map_err(crate::Error::Io)
 }
@@ -373,7 +401,7 @@ pub async fn login(
     let png = login_qr_png_bytes(&details)?;
 
     if options.detach_poll {
-        let qr_path = write_login_qr_png_file(&png, verbose)?;
+        let qr_path = write_login_qr_png_file(&png, home, verbose)?;
         let artifact_dir = qr_path
             .parent()
             .ok_or_else(|| crate::Error::msg("login QR path has no parent directory"))?;

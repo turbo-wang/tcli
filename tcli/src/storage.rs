@@ -65,20 +65,37 @@ pub fn openclaw_workspace_dir() -> PathBuf {
         .join("workspace")
 }
 
+/// Unique directory name for one `wallet login` attempt (`time_nanos`-`pid`).
+pub fn new_login_qr_session_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{nanos}-{}", std::process::id())
+}
+
+/// `~/.openclaw/workspace/tcli-login/<session>/login_qr.png` for a given [`new_login_qr_session_id`].
+pub fn openclaw_login_qr_png_path_for_session(session: &str) -> PathBuf {
+    openclaw_workspace_dir()
+        .join("tcli-login")
+        .join(session)
+        .join("login_qr.png")
+}
+
+/// Fallback when OpenClaw workspace is not writable: `<TCLI_HOME>/workspace/tcli-login/<session>/login_qr.png`.
+pub fn tcli_workspace_login_qr_png_path(home: &Path, session: &str) -> PathBuf {
+    home.join("workspace")
+        .join("tcli-login")
+        .join(session)
+        .join("login_qr.png")
+}
+
 /// PNG path for the current `wallet login`: a fresh directory under the OpenClaw workspace each time.
 ///
 /// Layout: `~/.openclaw/workspace/tcli-login/<session>/login_qr.png` (`session` = time + pid).
 /// OAuth/token data stays under [`tcli_home`]; only this image is placed for OpenClaw to display.
 pub fn openclaw_login_qr_png_path() -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let session = format!("{nanos}-{}", std::process::id());
-    openclaw_workspace_dir()
-        .join("tcli-login")
-        .join(session)
-        .join("login_qr.png")
+    openclaw_login_qr_png_path_for_session(&new_login_qr_session_id())
 }
 
 pub fn load_oauth(home: &Path) -> Result<Option<OAuthStored>> {
