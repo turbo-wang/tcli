@@ -22,8 +22,11 @@ const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// Extra JSON fields on `POST .../device_authorization` beyond RFC 8628.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct DeviceAuthorizationExtraFields {
-    /// Server may return a QR payload: PNG as base64 / `data:image/...;base64,...`, or a URL string to encode in the QR matrix.
-    #[serde(default)]
+    /// Preferred payload for the login QR image (see `login_qr_png_bytes`).
+    ///
+    /// Agentic MPP / `qr_code` 表：常为 **业务 URI**（如 `redotpay:…`），由 App/系统处理；CLI 将其**整段编入二维码**并保存为 PNG。
+    /// 兼容：PNG 的 Base64 / `data:image/...;base64,...`，或 `http(s)://` 字符串。Jackson 可能序列化为 `qrCode`。
+    #[serde(default, alias = "qrCode")]
     pub qr_code: Option<String>,
 }
 
@@ -861,9 +864,10 @@ fn eprint_login_qr_user_instructions(
     eprintln!();
 }
 
-/// If `qr_code` is set: use PNG bytes when value is valid base64 (optionally inside `data:...;base64,...`);
-/// otherwise treat as the string to embed in the QR image (e.g. `https://...`). If absent, embed
-/// `verification_uri_complete` or `verification_uri` as today.
+/// Builds the PNG bytes written to `login_qr.png`.
+///
+/// When `qr_code` is present: **http(s) URL** → encode that URL into a QR matrix; **PNG base64** (incl. `data:…;base64,`) → use decoded bytes; **any other string** (e.g. `redotpay:…` business URI for Android/App) → encode that string into the QR matrix.
+/// When absent: embed `verification_uri_complete` or `verification_uri` (unchanged).
 fn login_qr_png_bytes(details: &DeviceAuthorizationDetails) -> Result<Vec<u8>> {
     let fallback_url = details
         .verification_uri_complete()
@@ -877,12 +881,15 @@ fn login_qr_png_bytes(details: &DeviceAuthorizationDetails) -> Result<Vec<u8>> {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
     {
+        // Web URLs: encode as QR (same as custom schemes, but checked first for clarity).
         if raw.starts_with("http://") || raw.starts_with("https://") {
             return encode_login_qr_png(raw);
         }
+        // Optional: server-rendered PNG (legacy/alternate).
         if let Some(png) = try_decode_qr_code_png_bytes(raw) {
             return Ok(png);
         }
+        // Business / deep-link URIs (`redotpay:…`, `myapp://…`, etc.): encode UTF-8 bytes into QR.
         return encode_login_qr_png(raw);
     }
 
@@ -897,9 +904,13 @@ fn try_decode_qr_code_png_bytes(raw: &str) -> Option<Vec<u8>> {
     } else {
         s
     };
+    let b64_payload: String = b64_payload
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     let bytes = STANDARD
-        .decode(b64_payload)
-        .or_else(|_| URL_SAFE_NO_PAD.decode(b64_payload))
+        .decode(b64_payload.as_bytes())
+        .or_else(|_| URL_SAFE_NO_PAD.decode(b64_payload.as_bytes()))
         .ok()?;
     if bytes.len() >= 8 && bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
         Some(bytes)
@@ -970,6 +981,37 @@ mod token_poll_tests {
         let b64 = STANDARD.encode(&png);
         let data = format!("data:image/png;base64,{b64}");
         assert_eq!(super::try_decode_qr_code_png_bytes(&data).unwrap(), png);
+    }
+
+    #[test]
+    fn try_decode_qr_code_strips_whitespace_in_base64() {
+        let png = encode_login_qr_png("https://example.com/a").unwrap();
+        let b64 = STANDARD.encode(&png);
+        let mut spaced = String::new();
+        for (i, c) in b64.chars().enumerate() {
+            if i > 0 && i % 40 == 0 {
+                spaced.push('\n');
+            }
+            spaced.push(c);
+        }
+        assert_eq!(super::try_decode_qr_code_png_bytes(&spaced).unwrap(), png);
+    }
+
+    #[test]
+    fn device_authorization_extra_fields_accepts_qr_code_camel_case() {
+        let j = r#"{"qrCode":"https://example.com/deeplink"}"#;
+        let e: super::DeviceAuthorizationExtraFields = serde_json::from_str(j).unwrap();
+        assert_eq!(
+            e.qr_code.as_deref(),
+            Some("https://example.com/deeplink")
+        );
+    }
+
+    #[test]
+    fn encode_login_qr_accepts_redotpay_business_uri() {
+        let png = encode_login_qr_png("redotpay:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx").unwrap();
+        assert!(png.starts_with(&[0x89, 0x50, 0x4E, 0x47]));
+        assert!(png.len() > 64);
     }
 }
 
