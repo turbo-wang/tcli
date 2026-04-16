@@ -78,6 +78,7 @@
 | `verification_uri_complete` | **与本次待授权单生成的 H5 授权页完整 URL 一致**（含 Base64 `data` 与 HMAC `signature` 查询参数，与扫码打开页面同源逻辑） |
 | `expires_in`                | 秒，设备会话过期时间（`pay.oauth.device.expires-in-seconds`）                                   |
 | `interval`                  | 秒，建议轮询间隔（`pay.oauth.device.interval-seconds`）                                       |
+| `qr_code`                   | **可选**。服务端下发的二维码内容：可为 **PNG 的 Base64**（或 `data:image/png;base64,...`），或 **`https?://` URL 字符串**（客户端将其编入 QR）；未返回时客户端仍用 `verification_uri_complete` / `verification_uri` 生成 QR |
 
 
 **业务错误：HTTP 400**，Body：

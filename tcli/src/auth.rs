@@ -1,10 +1,15 @@
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use image::ImageFormat;
 use image::Luma;
-use oauth2::devicecode::StandardDeviceAuthorizationResponse;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::Engine as _;
+use oauth2::devicecode::{
+    DeviceAuthorizationResponse, ExtraDeviceAuthorizationFields,
+};
 use qrcode::QrCode;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +18,19 @@ use crate::storage::{OAuthStored, oauth_path, save_oauth};
 use crate::Result;
 
 const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
+
+/// Extra JSON fields on `POST .../device_authorization` beyond RFC 8628.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct DeviceAuthorizationExtraFields {
+    /// Server may return a QR payload: PNG as base64 / `data:image/...;base64,...`, or a URL string to encode in the QR matrix.
+    #[serde(default)]
+    pub qr_code: Option<String>,
+}
+
+impl ExtraDeviceAuthorizationFields for DeviceAuthorizationExtraFields {}
+
+/// Parsed device authorization response, including optional `qr_code`.
+pub type DeviceAuthorizationDetails = DeviceAuthorizationResponse<DeviceAuthorizationExtraFields>;
 
 /// oauth2's `RequestTokenError::Request` only displays as "Request failed"; the useful part is in
 /// [`std::error::Error::source`]. Walk the chain so users see e.g. connection errors and URLs.
@@ -120,7 +138,7 @@ struct DevicePollState {
     /// Directory containing `login_qr.png`; `result.json` is written here when polling finishes.
     artifact_dir: String,
     resolved: AuthResolvedSnapshot,
-    device_authorization: StandardDeviceAuthorizationResponse,
+    device_authorization: DeviceAuthorizationDetails,
 }
 
 fn poll_state_path(home: &Path) -> PathBuf {
@@ -160,7 +178,7 @@ fn write_login_result_json(artifact_dir: &std::path::Path, value: &serde_json::V
 fn write_poll_state(
     home: &Path,
     resolved: &ResolvedAuth,
-    details: &StandardDeviceAuthorizationResponse,
+    details: &DeviceAuthorizationDetails,
     artifact_dir: &Path,
 ) -> Result<PathBuf> {
     let wallet_dir = home.join("wallet");
@@ -259,7 +277,7 @@ async fn request_device_authorization(
     resolved: &ResolvedAuth,
     device_sn: &str,
     verbose: bool,
-) -> Result<StandardDeviceAuthorizationResponse> {
+) -> Result<DeviceAuthorizationDetails> {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -306,7 +324,7 @@ async fn request_device_authorization(
     }
 
     let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]);
-    serde_json::from_slice::<StandardDeviceAuthorizationResponse>(&bytes).map_err(|e| {
+    serde_json::from_slice::<DeviceAuthorizationDetails>(&bytes).map_err(|e| {
         crate::Error::msg(format!(
             "device_authorization: parse OAuth response JSON: {e}; body prefix: {preview}"
         ))
@@ -341,15 +359,15 @@ pub async fn login(
         eprintln!("  interval: {:?}", details.interval());
         let dc = details.device_code().secret();
         eprintln!("  device_code: <redacted, {} bytes>", dc.len());
+        match details.extra_fields().qr_code.as_ref().filter(|s| !s.is_empty()) {
+            Some(q) => eprintln!("  qr_code: <present, {} chars>", q.len()),
+            None => eprintln!("  qr_code: <absent>"),
+        }
     }
 
-    let auth_url_line = details
-        .verification_uri_complete()
-        .map(|u| u.secret().to_string())
-        .unwrap_or_else(|| details.verification_uri().to_string());
     let verification_code = details.user_code().secret().to_string();
 
-    let png = encode_login_qr_png(&auth_url_line)?;
+    let png = login_qr_png_bytes(&details)?;
 
     if options.detach_poll {
         let qr_path = write_login_qr_png_file(&png, verbose)?;
@@ -364,7 +382,7 @@ pub async fn login(
         let result_json = artifact_dir.join("result.json");
         eprint_login_qr_user_instructions(&details, &result_json);
 
-        spawn_poll_child(&state_path)?;
+        spawn_poll_child(&state_path, artifact_dir)?;
     } else {
         if verbose {
             eprintln!("[verbose] Polling token_url in-process (detach_poll=false)…");
@@ -376,7 +394,21 @@ pub async fn login(
     Ok(())
 }
 
-fn spawn_poll_child(state_path: &Path) -> Result<()> {
+/// Redirect poll child stderr to a session file so the parent process's stderr pipe (e.g. from an
+/// agent/tool runner) is not held open until the poll finishes — otherwise the host may wait
+/// indefinitely for EOF on stderr.
+fn spawn_poll_child(state_path: &Path, artifact_dir: &Path) -> Result<()> {
+    let log_path = artifact_dir.join("poll.log");
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| {
+            crate::Error::msg(format!(
+                "open poll log {}: {e}",
+                log_path.display()
+            ))
+        })?;
     let exe = std::env::current_exe()
         .map_err(|e| crate::Error::msg(format!("current_exe: {e}")))?;
     let mut cmd = Command::new(exe);
@@ -386,7 +418,7 @@ fn spawn_poll_child(state_path: &Path) -> Result<()> {
         .arg(state_path);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::inherit());
+    cmd.stderr(Stdio::from(log_file));
     cmd.spawn()
         .map_err(|e| crate::Error::msg(format!("spawn background login poll: {e}")))?;
     Ok(())
@@ -579,7 +611,7 @@ fn expires_at_from_token_json(expires_in: Option<u64>) -> Option<i64> {
 async fn exchange_device_token(
     home: &Path,
     resolved: &ResolvedAuth,
-    details: &StandardDeviceAuthorizationResponse,
+    details: &DeviceAuthorizationDetails,
     verbose: bool,
 ) -> Result<OAuthStored> {
     let http = crate::oauth_http::shared_oauth_reqwest_client();
@@ -803,7 +835,7 @@ fn format_expires_human(expires_at: Option<i64>) -> String {
 
 /// Friendly stderr after stdout lines: path, `MEDIA:…`, `VERIFICATION_CODE:…` (uses server `interval` / `expires_in`).
 fn eprint_login_qr_user_instructions(
-    details: &StandardDeviceAuthorizationResponse,
+    details: &DeviceAuthorizationDetails,
     result_json: &Path,
 ) {
     let mut interval = details.interval();
@@ -827,6 +859,53 @@ fn eprint_login_qr_user_instructions(
         result_json.display()
     );
     eprintln!();
+}
+
+/// If `qr_code` is set: use PNG bytes when value is valid base64 (optionally inside `data:...;base64,...`);
+/// otherwise treat as the string to embed in the QR image (e.g. `https://...`). If absent, embed
+/// `verification_uri_complete` or `verification_uri` as today.
+fn login_qr_png_bytes(details: &DeviceAuthorizationDetails) -> Result<Vec<u8>> {
+    let fallback_url = details
+        .verification_uri_complete()
+        .map(|u| u.secret().to_string())
+        .unwrap_or_else(|| details.verification_uri().to_string());
+
+    if let Some(raw) = details
+        .extra_fields()
+        .qr_code
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        if raw.starts_with("http://") || raw.starts_with("https://") {
+            return encode_login_qr_png(raw);
+        }
+        if let Some(png) = try_decode_qr_code_png_bytes(raw) {
+            return Ok(png);
+        }
+        return encode_login_qr_png(raw);
+    }
+
+    encode_login_qr_png(&fallback_url)
+}
+
+/// Decode `qr_code` when the server sends a PNG as base64 (with or without a `data:` URL prefix).
+fn try_decode_qr_code_png_bytes(raw: &str) -> Option<Vec<u8>> {
+    let s = raw.trim();
+    let b64_payload = if let Some(i) = s.find("base64,") {
+        s[i + "base64,".len()..].trim()
+    } else {
+        s
+    };
+    let bytes = STANDARD
+        .decode(b64_payload)
+        .or_else(|_| URL_SAFE_NO_PAD.decode(b64_payload))
+        .ok()?;
+    if bytes.len() >= 8 && bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        Some(bytes)
+    } else {
+        None
+    }
 }
 
 fn encode_login_qr_png(auth_url: &str) -> Result<Vec<u8>> {
@@ -876,6 +955,21 @@ mod token_poll_tests {
             }
             _other => panic!("expected Fatal, got unexpected variant"),
         }
+    }
+
+    #[test]
+    fn try_decode_qr_code_accepts_raw_base64_png() {
+        let png = encode_login_qr_png("https://example.com/z").unwrap();
+        let b64 = STANDARD.encode(&png);
+        assert_eq!(super::try_decode_qr_code_png_bytes(&b64).unwrap(), png);
+    }
+
+    #[test]
+    fn try_decode_qr_code_accepts_data_url() {
+        let png = encode_login_qr_png("x").unwrap();
+        let b64 = STANDARD.encode(&png);
+        let data = format!("data:image/png;base64,{b64}");
+        assert_eq!(super::try_decode_qr_code_png_bytes(&data).unwrap(), png);
     }
 }
 

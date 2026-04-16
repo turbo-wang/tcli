@@ -65,6 +65,7 @@ VERIFICATION_CODE:ABCD-EFGH
 ### 会话目录与 `result.json`
 
 - 二维码与 **`result.json`** 位于**同一会话目录**（即 `login_qr.png` 的父目录）。
+- 后台轮询子进程的 **stderr** 写入同目录下的 **`poll.log`**（避免占用主进程的 stderr 管道，便于 Agent 在主命令返回后立即结束会话）。
 - 后台轮询结束后会**原子写入** `result.json`（先写临时文件再 `rename`）。
 
 **成功**（不含 access_token 原文）：
