@@ -12,7 +12,7 @@ pub fn guide_text() -> &'static str {
   tempo request  — HTTP + MPP signing
 
 tcli — same command names where applicable; implementation differs:
-  tcli wallet login | logout — OAuth2 device flow (QR under ~/.openclaw/workspace/tcli-login/<session>/; stdout = path, MEDIA:path, VERIFICATION_CODE:…; same session dir gets result.json after background poll); token in ~/.tcli/wallet/oauth.json
+  tcli wallet login | logout — OAuth2 device flow (QR under ~/.openclaw/workspace/tcli-login/<session>/; stdout = path, MEDIA:path, OPENWEBUI_IMAGE:… or OPENWEBUI_IMAGE_ERROR:… when sidecar is used, VERIFICATION_CODE:…; same session dir gets result.json after background poll); token in ~/.tcli/wallet/oauth.json; optional media sidecar: scripts/start-openwebui-media-bridge.sh (OPENCLAW_MEDIA_PORT, default 18790)
   tcli wallet whoami | balance    — local token file + expiry only (no backend whoami API); use `tcli wallet login` when you need a new session
   tcli wallet keys|fund|transfer|services|sessions|mpp-sign  — stubs; need Tempo Wallet + `tempo`
   tcli request                    — curl-like; 402: Redot agentic/mpp/pay → `Authorization: Payment`

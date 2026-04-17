@@ -90,6 +90,71 @@ impl Default for LoginOptions {
     }
 }
 
+/// Default port for the Open WebUI media sidecar (`OPENCLAW_MEDIA_PORT`).
+const DEFAULT_OPENCLAW_MEDIA_PORT: u16 = 18790;
+
+#[derive(Debug, Deserialize)]
+struct SidecarRegisterResponse {
+    markdown: Option<String>,
+}
+
+/// `POST http://127.0.0.1:<port>/register` with `{"path":"<abs path>"}`; returns markdown for Open WebUI.
+async fn register_login_qr_with_sidecar(
+    qr_path: &Path,
+    verbose: bool,
+) -> std::result::Result<String, String> {
+    let port: u16 = std::env::var("OPENCLAW_MEDIA_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_OPENCLAW_MEDIA_PORT);
+    let abs = std::fs::canonicalize(qr_path)
+        .map_err(|e| format!("canonicalize {}: {e}", qr_path.display()))?;
+    let url = format!("http://127.0.0.1:{port}/register");
+    if verbose {
+        eprintln!(
+            "[verbose] media sidecar POST {url} path={}",
+            abs.display()
+        );
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({ "path": abs.to_string_lossy() });
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("{e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        let tail = text.trim();
+        let detail = if tail.is_empty() {
+            String::new()
+        } else {
+            let max = 200usize;
+            format!(
+                " {}",
+                if tail.len() > max {
+                    format!("{}…", &tail[..max])
+                } else {
+                    tail.to_string()
+                }
+            )
+        };
+        return Err(format!("HTTP {status}{detail}"));
+    }
+    let v: SidecarRegisterResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse JSON: {e}"))?;
+    v.markdown
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "sidecar response missing markdown".to_string())
+}
+
 const POLL_STATE_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -421,6 +486,17 @@ pub async fn login(
         let qr_abs = qr_path.display();
         println!("{qr_abs}");
         println!("MEDIA:{qr_abs}");
+        match register_login_qr_with_sidecar(&qr_path, verbose).await {
+            Ok(md) => {
+                println!("OPENWEBUI_IMAGE:{md}");
+            }
+            Err(e) => {
+                println!("OPENWEBUI_IMAGE_ERROR:{e}");
+                if verbose {
+                    eprintln!("[verbose] media sidecar: {e}");
+                }
+            }
+        }
         println!("VERIFICATION_CODE:{verification_code}");
         let result_json = artifact_dir.join("result.json");
         eprint_login_qr_user_instructions(&details, &result_json);
@@ -898,7 +974,7 @@ fn eprint_login_qr_user_instructions(
         interval_secs, total_min
     );
     eprintln!(
-        "Stdout has the QR path, MEDIA: line, and VERIFICATION_CODE: line. When finished, read this file once: {}",
+        "Stdout has the QR path, MEDIA: line, OPENWEBUI_IMAGE: (or OPENWEBUI_IMAGE_ERROR:), and VERIFICATION_CODE: line. When finished, read this file once: {}",
         result_json.display()
     );
     eprintln!();
@@ -1052,6 +1128,16 @@ mod token_poll_tests {
         let png = encode_login_qr_png("redotpay:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx").unwrap();
         assert!(png.starts_with(&[0x89, 0x50, 0x4E, 0x47]));
         assert!(png.len() > 64);
+    }
+
+    #[test]
+    fn sidecar_register_response_parses_markdown() {
+        let s = r#"{"markdown":"![](http://127.0.0.1:18790/m/00000000-0000-0000-0000-000000000001.png)"}"#;
+        let v: super::SidecarRegisterResponse = serde_json::from_str(s).unwrap();
+        assert_eq!(
+            v.markdown.as_deref(),
+            Some("![](http://127.0.0.1:18790/m/00000000-0000-0000-0000-000000000001.png)")
+        );
     }
 }
 
