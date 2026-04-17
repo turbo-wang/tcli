@@ -7,8 +7,30 @@ use crate::Result;
 pub struct ConfigFile {
     #[serde(default)]
     pub auth: AuthSection,
+    /// Legacy `[payment_token]` block; ignored. Remove from config.toml if present.
     #[serde(default)]
-    pub payment_token: PaymentTokenSection,
+    pub payment_token: Option<toml::Value>,
+    #[serde(default)]
+    pub agentic_mpp: AgenticMppSection,
+}
+
+/// `POST` path for Redot Agentic MPP pay (Bearer), relative to `[auth].base`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgenticMppSection {
+    #[serde(default = "default_agentic_mpp_pay_path")]
+    pub pay_path: String,
+}
+
+fn default_agentic_mpp_pay_path() -> String {
+    "/api/v1/agentic/mpp/pay".to_string()
+}
+
+impl Default for AgenticMppSection {
+    fn default() -> Self {
+        Self {
+            pay_path: default_agentic_mpp_pay_path(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -67,24 +89,6 @@ impl Default for AuthSection {
             app_name: default_app_name(),
             device_name: default_device_name(),
             oauth_scope: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PaymentTokenSection {
-    /// Full URL override for POST issue-token (optional).
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default)]
-    pub disable: bool,
-}
-
-impl Default for PaymentTokenSection {
-    fn default() -> Self {
-        Self {
-            url: None,
-            disable: false,
         }
     }
 }

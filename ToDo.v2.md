@@ -29,7 +29,7 @@ tcli/src/
 ├── storage.rs        # oauth.json 读写
 ├── config.rs         # OAuth 端点解析（TCLI_AUTH_BASE / config.toml）
 ├── config_file.rs    # ~/.tcli/config.toml
-├── api.rs            # tcli request：402、payment-token、x402、verbose
+├── api.rs            # tcli request：402、MPP（agentic/mpp/pay）、x402、verbose
 ├── x402.rs           # 402 体解析、MPP 检测文案
 └── tempo_reference.rs # `tcli guide` 文案（官方 tempo 命令对照）
 ```
@@ -53,12 +53,9 @@ tcli/src/
 - **curl 风格**：`-X`/`--request`、`--json`、`-d`（可重复）、`-H`、`--timeout`、`--dry-run`、`--max-spend` / `TCLI_MAX_SPEND`、**`-v`**（响应元数据走 **stderr**，body 走 **stdout** 便于管道）。
 - **默认方法**：无 `-X` 时，有 `--json` 或 `-d` 则 **POST**，否则 **GET**。
 - **402 处理顺序**（与真实 `tempo request` 差异见下）：
-  1. **Payment token（demo）**：`POST` **`{auth_base}/issue-token`**，body 为 `{"original_url","response_status","response_body"}`；`auth_base` 与 **`tcli wallet login` 同源**：`TCLI_AUTH_BASE` → `[auth].base` → 默认 **`https://app.rp-2023app.com`**。成功则取 `payment_token`，原请求重试时带 **`X-Payment-Token`**（可用 `--payment-token-header` 改名）。  
-     - **`~/.tcli/config.toml`**：`[payment_token] url` 可覆盖完整 URL；**`disable = true`** 则跳过此步。  
-     - **`POST /issue-token` 失败**：不中断，**继续**后续逻辑（verbose 下打印说明）。
-  2. **MPP**：若存在 **`WWW-Authenticate: Payment …`** → 报错并指向 **`tempo request`** / mpp.dev（demo 无法链上签名）。若已做过 payment-token 重试仍 MPP → 使用**另一段**说明文案。
-  3. **Legacy x402 demo**：若 body 为 `{"x402":{...}}`，则校验 **`--max-spend`**、需已登录会话，重试带 **`X-x402-Accept`**。
-  4. **Problem JSON**（如 `challengeId` + payment-required）：按 MPP 类处理 → 同上，指向官方 Tempo CLI。
+  1. **MPP（Redot）**：若存在 **`WWW-Authenticate: Payment …`** 且已 **`tcli wallet login`**，则 **`POST`** **`[agentic_mpp].pay_path`**（默认 `api/v1/agentic/mpp/pay`，相对 **`[auth].base`**），取凭证后原请求重试带 **`Authorization: Payment …`**。未登录则报错提示先登录。
+  2. **Legacy x402 demo**：若 body 为 `{"x402":{...}}`，则校验 **`--max-spend`**、需已登录会话，重试带 **`X-x402-Accept`**。
+  3. **Problem JSON**（如 `challengeId` + payment-required）：按 MPP 类处理 → 同上，指向官方 Tempo CLI。
 
 ### 4.4 `tcli guide`
 
@@ -68,16 +65,16 @@ tcli/src/
 
 | 能力 | 官方 `tempo request` | 当前 `tcli` |
 |------|----------------------|-------------|
-| 402 / MPP | 解析 `WWW-Authenticate: Payment`，钱包签名，`Authorization: Payment` | **不**实现链上支付；检测到 MPP 则**报错并引导使用 `tempo request`** |
-| 402 / demo | 视产品而定 | **x402 JSON** + **`X-x402-Accept`** 重试；**issue-token** + **`X-Payment-Token`** 为服务端提供的演示/兼容路径（与 `auth_base` 同源） |
+| 402 / MPP | 解析 `WWW-Authenticate: Payment`，钱包签名，`Authorization: Payment` | **不**实现 Tempo 链上签名；若服务端为 Redot MPP，则用 **`agentic/mpp/pay`**（OAuth）换 **`Authorization: Payment`** 并重试；否则仍可能报错并引导 **`tempo request`** |
+| 402 / demo | 视产品而定 | **MPP**：`WWW-Authenticate: Payment` → **`agentic/mpp/pay`** + **`Authorization: Payment`**；**legacy x402 JSON** + **`X-x402-Accept`** |
 | 钱包 | Passkey / Tempo 托管链上密钥 | OAuth **Bearer** 会话 + 磁盘 token |
 
 ## 6. 配置与环境（摘要）
 
 | 用途 | 说明 |
 |------|------|
-| `~/.tcli/config.toml` | `[auth]`：`base`、`client_id`、各 OAuth 路径等；`[payment_token]`：`url` 覆盖、`disable` |
-| `TCLI_AUTH_BASE` | 与登录相同的 auth 服务根 URL；**payment token URL = `{base}/issue-token`**（无单独 payment-token 环境变量） |
+| `~/.tcli/config.toml` | `[auth]`：`base`、`client_id`、各 OAuth 路径等；`[agentic_mpp]`：`pay_path`；旧版 **`[payment_token]`** 表仅作兼容忽略 |
+| `TCLI_AUTH_BASE` | 与登录相同的 auth 服务根 URL（OAuth 与 MPP pay 路径均相对此 base 解析） |
 | `TCLI_MAX_SPEND` / `--max-spend` | x402 demo 预算 |
 | `TCLI_HOME` | 数据目录（默认 `~/.tcli`） |
 
@@ -100,7 +97,7 @@ tcli/src/
 | 一 | clap 子命令 + 未知命令错误 | **已覆盖**（含 `guide`） |
 | 二 | Device Flow | **已实现**（文件存 token，非 keyring） |
 | 三 | 安全存储 | **部分**：磁盘 oauth.json + config.toml；keyring 未做 |
-| 四 | 付费 HTTP / 402 / request | **部分**：x402 demo + payment-token + MPP 检测 + verbose；**非**完整 Tempo 链上支付 |
+| 四 | 付费 HTTP / 402 / request | **部分**：x402 demo + Redot MPP（OAuth + agentic pay）+ verbose；**非**完整 Tempo 链上支付 |
 
 ---
 

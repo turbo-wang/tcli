@@ -98,6 +98,9 @@ struct AuthResolvedSnapshot {
     client_id: String,
     device_authorization_url: String,
     token_url: String,
+    /// Since poll state v3; older files omit this.
+    #[serde(default)]
+    agentic_mpp_pay_url: Option<String>,
 }
 
 impl AuthResolvedSnapshot {
@@ -107,15 +110,25 @@ impl AuthResolvedSnapshot {
             client_id: r.client_id.clone(),
             device_authorization_url: r.device_authorization_url.to_string(),
             token_url: r.token_url.to_string(),
+            agentic_mpp_pay_url: Some(r.agentic_mpp_pay_url.to_string()),
         }
     }
 
     fn to_resolved(&self) -> Result<ResolvedAuth> {
-        Ok(ResolvedAuth {
-            base: self
-                .base
+        let base: url::Url = self
+            .base
+            .parse()
+            .map_err(|e| crate::Error::msg(format!("poll state base URL: {e}")))?;
+        let agentic_mpp_pay_url = match &self.agentic_mpp_pay_url {
+            Some(u) => u
                 .parse()
-                .map_err(|e| crate::Error::msg(format!("poll state base URL: {e}")))?,
+                .map_err(|e| crate::Error::msg(format!("poll state agentic_mpp_pay_url: {e}")))?,
+            None => base
+                .join("api/v1/agentic/mpp/pay")
+                .map_err(|e| crate::Error::msg(format!("poll state default agentic mpp URL: {e}")))?,
+        };
+        Ok(ResolvedAuth {
+            base,
             client_id: self.client_id.clone(),
             device_authorization_url: self
                 .device_authorization_url
@@ -125,8 +138,7 @@ impl AuthResolvedSnapshot {
                 .token_url
                 .parse()
                 .map_err(|e| crate::Error::msg(format!("poll state token_url: {e}")))?,
-            payment_token_url: None,
-            payment_token_disabled: true,
+            agentic_mpp_pay_url,
             app_name: "tcli".to_string(),
             device_name: "tcli-device".to_string(),
             oauth_scope: None,

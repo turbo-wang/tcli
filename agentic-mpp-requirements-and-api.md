@@ -23,6 +23,7 @@
 
 - `POST /api/v1/agentic/mpp/pay` 的 URL、鉴权方式、请求头、`TypedResult` 包装不变。
 - **响应体 `data`（Receipt）**：嵌套 `**settlement.amount` / `settlement.currency`（字符串）**，对齐 [mpp.dev/protocol/receipts](https://mpp.dev/protocol/receipts)。请求体可使用 JSON 字段 `**method`** 作为 `mppMethod` 的别名。
+- **tcli 客户端**：`WWW-Authenticate` **同一值内可并列多个** `Payment …`（例如先 **tempo** 再 **stripe**）。tcli **只解析并提交 `method="tempo"`** 的那一段到 `agentic/mpp/pay`；其余方法（如 stripe）**忽略**，待后续版本再接。
 
 ---
 
@@ -106,7 +107,7 @@ Agentic MPP 文档范围以 **OAuth 路径**为主。
 
 | 字段           | 类型     | 必填  | 说明                                                         |
 | ------------ | ------ | --- | ---------------------------------------------------------- |
-| `client_id`  | string | 是   | 客户端标识；若配置 `pay.oauth.device.allowed-client-ids`（非空），须命中白名单（常见项如 **`OpenClaw`**；tcli 默认 `client_id` 与之对齐） |
+| `client_id`  | string | 是   | 客户端标识；若配置 `pay.oauth.device.allowed-client-ids`（非空），须命中白名单 |
 | `appName`    | string | 是   | 应用/技能名称                                                    |
 | `publicKey`  | string | 否   | 可选；无设备签名场景可传 `""`                                          |
 | `deviceName` | string | 是   | 设备名称                                                       |
@@ -126,9 +127,8 @@ Agentic MPP 文档范围以 **OAuth 路径**为主。
 | `verification_uri_complete` | 优先：配置 `pay.authorization.qrcode-deeplink.base-url` 非空时为 App 深链；否则为本次待授权单对应的 **H5 授权页完整 URL** |
 | `expires_in`                | 秒，会话 TTL（`pay.oauth.device.expires-in-seconds`）                                              |
 | `interval`                  | 秒，建议轮询间隔（`pay.oauth.device.interval-seconds`）                                                |
-| `qr_code`                   | 扩展：与 `qr_code` 表业务码一致（如 `redotpay:…`），为 **App/系统可识别的 URI 字符串**（非文件路径） |
+| `qr_code`                   | 扩展：与 `qr_code` 表业务码一致（如 `redotpay:…`）                                                        |
 
-无屏设备 / CLI：应将该字符串**编入二维码图片**（PNG）供用户扫描；与旧版兼容时也可能下发 PNG 的 Base64。若未返回 `qr_code`，仍可用 `verification_uri_complete`（或 `verification_uri`）生成扫码内容。
 
 **业务错误：HTTP 400**：`{ "error": "invalid_client", "error_description": "..." }`  
 **服务端异常：HTTP 500**：`{ "error": "server_error" }`
@@ -287,20 +287,22 @@ Agentic MPP 文档范围以 **OAuth 路径**为主。
 | `tempo`          | object | 否   | Tempo：`recipient`、`tokenContract`、`decimals` 等（链上路由）；**链上实际转账数量**由服务端按订单（扣款总额 − 平台手续费）计算，**不**采用客户端 `transferAmount`/根 `amount` |
 
 
-**成功响应 `data`（`MppPaymentReceiptDto`）**
+**成功响应** `data`**（`**MppPaymentReceiptDto`**）**
 
 
-| 字段路径                       | 类型     | 说明                          |
-| -------------------------- | ------ | --------------------------- |
-| `code`                     | number | 业务码，成功一般为 200               |
-| `data.challengeId`         | string | 与请求一致                       |
-| `data.method`              | string | 与 `mppMethod` / `method` 对应 |
-| `data.reference`           | string | 结算引用（如链上 tx）                |
-| `data.settlement`          | object | 嵌套，对齐 mpp.dev receipts      |
-| `data.settlement.amount`   | string | 结算数量（字符串）                   |
-| `data.settlement.currency` | string | 币种或代币代码（如 `usdt`）           |
-| `data.status`              | string | 如 `success`                 |
-| `data.timestamp`           | string | ISO 时间（UTC）                 |
+| 字段路径                           | 类型     | 说明                                                                                                                                  |
+| ------------------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `code`                         | number | 业务码，成功一般为 200                                                                                                                       |
+| `data.challengeId`             | string | 与请求一致                                                                                                                               |
+| `data.method`                  | string | 与 `mppMethod` / `method` 对应                                                                                                         |
+| `data.reference`               | string | 结算引用（如链上 tx）                                                                                                                        |
+| `data.settlement`              | object | 嵌套，对齐 mpp.dev receipts                                                                                                              |
+| `data.settlement.amount`       | string | 结算数量（字符串）                                                                                                                           |
+| `data.settlement.currency`     | string | 币种或代币代码（如 `usdt`）                                                                                                                   |
+| `data.status`                  | string | 如 `success`                                                                                                                         |
+| `data.timestamp`               | string | ISO 时间（UTC）                                                                                                                         |
+| `data.credential`              | object | 可选；**MPP Credential**（[credentials](https://mpp.dev/protocol/credentials)），扣款且**结算成功**后生成；Tempo 为 `payload.type=hash` + 链上 `txHash` |
+| `data.credentialAuthorization` | string | 可选；可直接作为请求头：`Authorization: <credentialAuthorization>`（即 `Payment` + base64url(JSON)）                                               |
 
 
 **常见错误码（节选）**
@@ -322,6 +324,7 @@ Agentic MPP 文档范围以 **OAuth 路径**为主。
 | 配置项                                 | 说明                                                              |
 | ----------------------------------- | --------------------------------------------------------------- |
 | `pay.agentic-mpp.platform-fee-rate` | 平台手续费比例                                                         |
+| `mpp.credential.realm`              | 可选，默认 `redotpay`；写入 Credential 的 `challenge.realm`              |
 | pay（reap）侧                          | `bizType=AGENTIC_MPP_PAYMENT(135)`、`paymentScenarioCode` 等与配置一致 |
 
 

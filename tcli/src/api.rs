@@ -1,13 +1,13 @@
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use reqwest::{Client, Method, StatusCode, Url};
-use serde_json::{json, Value};
+use serde_json::Value;
 
+use crate::agentic_mpp;
 use crate::config::ResolvedAuth;
 use crate::storage::load_oauth;
 use crate::x402;
 use crate::Result;
 
-const DEFAULT_PAYMENT_TOKEN_HEADER: &str = "X-Payment-Token";
 const X402_ACCEPT_HEADER: &str = "X-x402-Accept";
 
 #[derive(Debug, Clone)]
@@ -21,7 +21,6 @@ pub struct RequestArgs {
     pub dry_run: bool,
     pub max_spend: Option<String>,
     pub verbose: bool,
-    pub payment_token_header: Option<String>,
 }
 
 fn parse_method(args: &RequestArgs) -> Method {
@@ -130,7 +129,10 @@ fn redact_sensitive_json(v: &mut Value) {
                 if matches!(
                     k.as_str(),
                     "access_token" | "refresh_token" | "payment_token" | "id_token" | "device_code"
+                        | "credentialAuthorization"
                 ) {
+                    *val = Value::String("<redacted>".to_string());
+                } else if k.as_str() == "credential" {
                     *val = Value::String("<redacted>".to_string());
                 } else {
                     redact_sensitive_json(val);
@@ -167,7 +169,7 @@ fn format_body_for_verbose_response(body: &[u8]) -> String {
 }
 
 /// Full response dump to stderr (verbose). Response body still written to stdout unchanged.
-fn log_verbose_incoming(
+pub(crate) fn log_verbose_incoming(
     label: &str,
     status: StatusCode,
     headers: &reqwest::header::HeaderMap,
@@ -272,72 +274,53 @@ pub async fn run_request(
     }
 
     // --- 402 handling ---
-    let mut retried_with_payment_token = false;
-
-    // 1) Payment token (demo)
-    if !resolved.payment_token_disabled {
-        if let Some(ref pt_url) = resolved.payment_token_url {
-            match issue_payment_token(
-                pt_url.as_str(),
-                args.url.as_str(),
-                status.as_u16(),
-                &body_bytes,
-                args.verbose,
-            )
-            .await
-            {
-                Ok(token) => {
-                    let hname = args
-                        .payment_token_header
-                        .as_deref()
-                        .unwrap_or(DEFAULT_PAYMENT_TOKEN_HEADER);
-                    let hn = HeaderName::from_bytes(hname.as_bytes())
-                        .map_err(|e| crate::Error::msg(format!("payment token header: {e}")))?;
-                    let hv = HeaderValue::from_str(&token)
-                        .map_err(|e| crate::Error::msg(format!("payment token value: {e}")))?;
-                    headers.insert(hn, hv);
-                    retried_with_payment_token = true;
-
-                    let r2 = send_request(&client, &method, &url, &headers, &body, args).await?;
-                    status = r2.status();
-                    hdrs = r2.headers().clone();
-                    body_bytes = r2.bytes().await?.to_vec();
-                    if args.verbose {
-                        log_verbose_incoming("response#2 (after payment-token retry)", status, &hdrs, &body_bytes);
-                    }
-                }
-                Err(e) => {
-                    if args.verbose {
-                        eprintln!("issue-token skipped or failed: {e}");
-                    }
-                }
-            }
-        }
-    }
 
     // Still 402? Continue checks on latest response.
     if status == StatusCode::PAYMENT_REQUIRED {
-        // 2) MPP
-        if let Some(www) = hdrs.get(reqwest::header::WWW_AUTHENTICATE) {
-            if let Ok(s) = www.to_str() {
-                if x402::is_payment_www_authenticate(s) {
-                    if retried_with_payment_token {
-                        return Err(crate::Error::msg(
-                            "Payment required (MPP) persists after payment-token retry. \
-                            On-chain signing is not implemented in tcli — use `tempo request` \
-                            or see https://mpp.dev for wallet flows.",
-                        ));
-                    }
-                    return Err(crate::Error::msg(
-                        "Payment required (MPP / WWW-Authenticate: Payment). \
-                        tcli does not perform on-chain signing — use `tempo request` \
-                        or see https://mpp.dev.",
-                    ));
-                }
+        // 1) MPP (`WWW-Authenticate: Payment`): Redot `agentic/mpp/pay` then retry with Credential.
+        //    One header value may list several `Payment …` challenges (e.g. tempo + stripe); we only use `method=tempo`.
+        let any_payment = any_www_authenticate_payment_header(&hdrs);
+        let tempo_seg = select_tempo_www_authenticate_payment_segment(&hdrs);
+        if any_payment && tempo_seg.is_none() {
+            return Err(crate::Error::msg(
+                "Payment required (MPP): WWW-Authenticate lists Payment challenge(s) but none with method=tempo. tcli only handles Tempo for now.",
+            ));
+        }
+        if let Some(s) = tempo_seg {
+            let session = load_oauth(home)?;
+            let Some(sess) = session else {
+                return Err(crate::Error::msg(
+                    "Payment required (MPP). Log in first (`tcli wallet login`), then retry.",
+                ));
+            };
+            let authz = agentic_mpp::obtain_payment_authorization_header(
+                &client,
+                &resolved.agentic_mpp_pay_url,
+                &sess.access_token,
+                s,
+                args.verbose,
+            )
+            .await?;
+            let hv = HeaderValue::from_str(&authz).map_err(|e| {
+                crate::Error::msg(format!("MPP Payment credential header: {e}"))
+            })?;
+            headers.insert(AUTHORIZATION, hv);
+
+            let r_mpp = send_request(&client, &method, &url, &headers, &body, args).await?;
+            status = r_mpp.status();
+            hdrs = r_mpp.headers().clone();
+            body_bytes = r_mpp.bytes().await?.to_vec();
+            if args.verbose {
+                log_verbose_incoming(
+                    "response#2 (after agentic mpp pay + Payment retry)",
+                    status,
+                    &hdrs,
+                    &body_bytes,
+                );
             }
         }
 
-        // 3) Legacy x402 JSON body
+        // 2) Legacy x402 JSON body
         if x402::parse_x402_body(&String::from_utf8_lossy(&body_bytes)).is_some() {
             let session = load_oauth(home)?;
             if session.is_none() {
@@ -361,11 +344,11 @@ pub async fn run_request(
             hdrs = r3.headers().clone();
             body_bytes = r3.bytes().await?.to_vec();
             if args.verbose {
-                log_verbose_incoming("response#3 (after x402 retry)", status, &hdrs, &body_bytes);
+                log_verbose_incoming("response#3 (after legacy x402 retry)", status, &hdrs, &body_bytes);
             }
         }
 
-        // 4) Problem JSON
+        // 3) Problem JSON
         let body_str = String::from_utf8_lossy(&body_bytes);
         if x402::looks_like_payment_problem_json(body_str.as_ref()) {
             return Err(crate::Error::msg(
@@ -375,6 +358,32 @@ pub async fn run_request(
     }
 
     write_response(status, &hdrs, &body_bytes, args.verbose)
+}
+
+fn any_www_authenticate_payment_header(headers: &reqwest::header::HeaderMap) -> bool {
+    for v in headers.get_all(reqwest::header::WWW_AUTHENTICATE) {
+        if let Ok(s) = v.to_str() {
+            if x402::is_payment_www_authenticate(s) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Picks the `Payment …` segment with `method=tempo` when multiple challenges share one header value.
+fn select_tempo_www_authenticate_payment_segment(
+    headers: &reqwest::header::HeaderMap,
+) -> Option<&str> {
+    for v in headers.get_all(reqwest::header::WWW_AUTHENTICATE) {
+        let Ok(whole) = v.to_str() else {
+            continue;
+        };
+        if let Some(seg) = agentic_mpp::select_tempo_payment_challenge(whole) {
+            return Some(seg);
+        }
+    }
+    None
 }
 
 fn check_max_spend(args: &RequestArgs) -> Result<()> {
@@ -388,48 +397,3 @@ fn check_max_spend(args: &RequestArgs) -> Result<()> {
     Ok(())
 }
 
-async fn issue_payment_token(
-    issue_url: &str,
-    original_url: &str,
-    response_status: u16,
-    response_body: &[u8],
-    verbose: bool,
-) -> Result<String> {
-    let client = Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
-    let body = json!({
-        "original_url": original_url,
-        "response_status": response_status,
-        "response_body": String::from_utf8_lossy(response_body).to_string(),
-    });
-    if verbose {
-        eprintln!("[verbose] issue-token --> POST {issue_url}");
-        eprintln!(
-            "[verbose] issue-token --> body: {}",
-            serde_json::to_string(&body).unwrap_or_else(|_| "<encode error>".into())
-        );
-    }
-    let r = client.post(issue_url).json(&body).send().await?;
-    let st = r.status();
-    let hdrs = r.headers().clone();
-    let bytes = r.bytes().await?;
-    if verbose {
-        log_verbose_incoming("issue-token", st, &hdrs, &bytes);
-    }
-    if !st.is_success() {
-        return Err(crate::Error::msg(format!(
-            "issue-token HTTP {}",
-            st
-        )));
-    }
-    let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-        crate::Error::msg(format!("issue-token: invalid JSON: {e}"))
-    })?;
-    let token = v
-        .get("payment_token")
-        .and_then(|x| x.as_str())
-        .ok_or_else(|| crate::Error::msg("issue-token: missing payment_token"))?;
-    Ok(token.to_string())
-}

@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 
+use clap::builder::PossibleValuesParser;
 use clap::{Parser, Subcommand};
 
 use crate::config::{self, config_path};
@@ -12,7 +13,7 @@ use crate::Result;
 #[command(
     name = "tcli",
     version,
-    about = "Agent-oriented CLI: wallet (OAuth device flow) and HTTP request (402 demo handling)."
+    about = "Agent-oriented CLI: wallet (OAuth), Agentic MPP pay, and HTTP request (402 + Payment retry)."
 )]
 pub struct CliRoot {
     /// Verbose logging: URLs and response metadata on stderr (like curl -v style for OAuth / HTTP).
@@ -32,6 +33,12 @@ pub enum TopLevel {
     /// Register a service (stub)
     Add {
         name: String,
+    },
+    /// Redot Agentic MPP — `POST /api/v1/agentic/mpp/pay` (requires `wallet login`)
+    #[command(name = "agentic-mpp")]
+    AgenticMpp {
+        #[command(subcommand)]
+        action: AgenticMppAction,
     },
     /// HTTP request with curl-like flags and 402 demo handling
     Request {
@@ -53,8 +60,6 @@ pub enum TopLevel {
         max_spend: Option<String>,
         #[arg(short, long)]
         verbose: bool,
-        #[arg(long = "payment-token-header")]
-        payment_token_header: Option<String>,
     },
     /// List services (stub)
     List,
@@ -70,6 +75,33 @@ pub enum TopLevel {
     Guide,
     #[command(external_subcommand)]
     External(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+pub enum AgenticMppAction {
+    /// Call pay API (prints TypedResult JSON; fails if `data` has no credential)
+    Pay {
+        /// `AgenticMppPayRequest.amount`
+        #[arg(long)]
+        amount: f64,
+        #[arg(long)]
+        challenge_id: Option<String>,
+        /// MPP method (`tempo` only in this build; `stripe` and others later).
+        #[arg(
+            long,
+            default_value = "tempo",
+            value_parser = PossibleValuesParser::new(["tempo"])
+        )]
+        method: String,
+        #[arg(long, default_value = "usdt")]
+        pay_variety_code: String,
+        #[arg(long)]
+        recipient: Option<String>,
+        #[arg(long)]
+        token_contract: Option<String>,
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -185,6 +217,30 @@ pub async fn run() -> Result<()> {
                 "stub: `tcli add` — service manifest download not implemented (name={name:?})."
             );
         }
+        TopLevel::AgenticMpp { action } => match action {
+            AgenticMppAction::Pay {
+                amount,
+                challenge_id,
+                method,
+                pay_variety_code,
+                recipient,
+                token_contract,
+                verbose,
+            } => {
+                crate::agentic_mpp::run_pay_cli(
+                    &home,
+                    &resolved,
+                    amount,
+                    challenge_id,
+                    method,
+                    pay_variety_code,
+                    recipient,
+                    token_contract,
+                    cli.verbose || verbose,
+                )
+                .await?;
+            }
+        },
         TopLevel::Request {
             url,
             method,
@@ -195,7 +251,6 @@ pub async fn run() -> Result<()> {
             dry_run,
             max_spend,
             verbose,
-            payment_token_header,
         } => {
             let args = crate::api::RequestArgs {
                 url,
@@ -207,7 +262,6 @@ pub async fn run() -> Result<()> {
                 dry_run,
                 max_spend,
                 verbose: cli.verbose || verbose,
-                payment_token_header,
             };
             crate::api::run_request(&home, &resolved, &args).await?;
         }

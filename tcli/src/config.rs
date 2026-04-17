@@ -3,15 +3,15 @@ use std::path::PathBuf;
 use crate::config_file::ConfigFile;
 use crate::Result;
 
-/// Resolved OAuth / payment-token settings (env + file + defaults).
+/// Resolved OAuth / API URLs (env + file + defaults).
 #[derive(Debug, Clone)]
 pub struct ResolvedAuth {
     pub base: url::Url,
     pub client_id: String,
     pub device_authorization_url: url::Url,
     pub token_url: url::Url,
-    pub payment_token_url: Option<url::Url>,
-    pub payment_token_disabled: bool,
+    /// `POST .../agentic/mpp/pay` (OAuth Bearer + JSON body).
+    pub agentic_mpp_pay_url: url::Url,
     pub app_name: String,
     pub device_name: String,
     pub oauth_scope: Option<String>,
@@ -34,22 +34,14 @@ pub fn resolve(cfg: &ConfigFile) -> Result<ResolvedAuth> {
     let device_url = join_base(&base, &cfg.auth.device_authorization_path)?;
     let token_url = join_base(&base, &cfg.auth.token_path)?;
 
-    let payment_token_disabled = cfg.payment_token.disable;
-    let payment_token_url = if payment_token_disabled {
-        None
-    } else if let Some(ref u) = cfg.payment_token.url {
-        Some(u.parse().map_err(|e: url::ParseError| crate::Error::from(e))?)
-    } else {
-        Some(join_base(&base, "issue-token")?)
-    };
+    let agentic_mpp_pay_url = join_base(&base, &cfg.agentic_mpp.pay_path)?;
 
     Ok(ResolvedAuth {
         base,
         client_id: cfg.auth.client_id.clone(),
         device_authorization_url: device_url,
         token_url,
-        payment_token_url,
-        payment_token_disabled,
+        agentic_mpp_pay_url,
         app_name: cfg.auth.app_name.clone(),
         device_name: cfg.auth.device_name.clone(),
         oauth_scope: cfg.auth.oauth_scope.clone(),

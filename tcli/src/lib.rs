@@ -1,3 +1,4 @@
+pub mod agentic_mpp;
 pub mod api;
 pub mod auth;
 mod oauth_http;
